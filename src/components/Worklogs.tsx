@@ -70,7 +70,7 @@ export default function Worklogs({ creds, onUnauthorized }: Props) {
           <div className="grid-2">
             <div className="card pad">
               <h2>Hours per day</h2>
-              <DayChart perDay={stats.perDay} />
+              <DayChart perDay={stats.perDay} entries={data} />
             </div>
             <div className="card pad">
               <h2>By project / team</h2>
@@ -154,19 +154,70 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   );
 }
 
-function DayChart({ perDay }: { perDay: [string, number][] }) {
+function DayChart({ perDay, entries }: { perDay: [string, number][]; entries: WorklogEntry[] }) {
+  const [hover, setHover] = useState<number | null>(null);
   const max = Math.max(DAY_TARGET, ...perDay.map(([, s]) => s));
   const dense = perDay.length > 14;
+
+  // Per-day task breakdown for the tooltip.
+  const tasksByDay = useMemo(() => {
+    const m = new Map<string, Map<string, { key: string; summary: string; seconds: number }>>();
+    for (const e of entries) {
+      const day = m.get(e.date) ?? new Map();
+      const t = day.get(e.issueKey) ?? { key: e.issueKey, summary: e.summary, seconds: 0 };
+      t.seconds += e.timeSpentSeconds;
+      day.set(e.issueKey, t);
+      m.set(e.date, day);
+    }
+    return m;
+  }, [entries]);
+
+  const active = hover === null ? null : perDay[hover];
+  const tasks = active ? [...(tasksByDay.get(active[0])?.values() ?? [])].sort((a, b) => b.seconds - a.seconds) : [];
+  const shown = tasks.slice(0, 5);
+  // Keep the tooltip inside the chart at the edges.
+  const align = hover === null ? 'center' : hover < 2 ? 'start' : hover > perDay.length - 3 ? 'end' : 'center';
+
   return (
-    <div className="chart" role="img" aria-label="Hours logged per day">
-      <div className="plot">
+    <div className="chart" aria-label="Hours logged per day">
+      <div className="plot" onMouseLeave={() => setHover(null)}>
         <div className="target" style={{ bottom: `${(DAY_TARGET / max) * 100}%` }}><span>8h</span></div>
-        {perDay.map(([day, secs]) => (
-          <div key={day} className={`col ${isWeekend(day) ? 'weekend' : ''}`} title={`${formatDay(day, { year: 'numeric' })}: ${formatDuration(secs)}`}>
+        {perDay.map(([day, secs], i) => (
+          <div
+            key={day}
+            className={`col ${isWeekend(day) ? 'weekend' : ''} ${hover === i ? 'hover' : ''}`}
+            tabIndex={0}
+            aria-label={`${formatDay(day, { year: 'numeric' })}: ${formatDuration(secs)}`}
+            onMouseEnter={() => setHover(i)}
+            onFocus={() => setHover(i)}
+            onBlur={() => setHover(null)}
+          >
             {secs > 0 && !dense && <span className="bar-val">{formatHours(secs)}</span>}
             <div className="bar" style={{ height: `${(secs / max) * 100}%` }} />
           </div>
         ))}
+        {active && (
+          <div
+            className={`chart-tip ${align}`}
+            role="tooltip"
+            style={{
+              left: `${((hover! + 0.5) / perDay.length) * 100}%`,
+              bottom: `calc(${Math.min((active[1] / max) * 100, 60)}% + 22px)`,
+            }}
+          >
+            <div className="tip-head">
+              <span>{formatDay(active[0], { year: 'numeric' })}</span>
+              <strong>{active[1] ? formatDuration(active[1]) : 'Nothing logged'}</strong>
+            </div>
+            {shown.map((t) => (
+              <div key={t.key} className="tip-row">
+                <span className="tip-task"><b>{t.key}</b> {t.summary}</span>
+                <span>{formatDuration(t.seconds)}</span>
+              </div>
+            ))}
+            {tasks.length > shown.length && <div className="tip-more">+{tasks.length - shown.length} more</div>}
+          </div>
+        )}
       </div>
       <div className="labels">
         {perDay.map(([day]) => (
