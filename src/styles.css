@@ -202,3 +202,12 @@ td.caret { width: 28px; padding-right: 0; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; background: var(--weekend); border: 1px solid var(--border); }
 .dot.done { background: var(--ok); border-color: var(--ok); }
 .dot.doing { background: var(--accent); border-color: var(--accent); }
+
+/* pagination */
+.table-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.pager-size { display: flex; align-items: center; gap: 6px; }
+.pager-size select { padding: 3px 6px; }
+.pager-pages { display: flex; align-items: center; gap: 4px; }
+.pager-pages .btn { min-width: 32px; padding: 4px 8px; }
+.pager-pages .btn.primary { cursor: default; }

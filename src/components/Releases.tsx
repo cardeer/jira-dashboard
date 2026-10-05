@@ -4,6 +4,7 @@ import { api } from '../api';
 import { daysFromToday, describeDays, formatDate } from '../dates';
 import { useAsync } from '../useAsync';
 import ErrorBox from './ErrorBox';
+import Pagination, { usePagination } from './Pagination';
 
 interface Props {
   creds: Credentials;
@@ -69,6 +70,8 @@ function ReleaseList({
     });
   }, [data, filter, project, query]);
 
+  const pager = usePagination(rows);
+
   return (
     <section>
       <div className="toolbar">
@@ -105,7 +108,7 @@ function ReleaseList({
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {pager.slice.map((r) => (
                 <tr key={`${r.projectKey}-${r.id}`} className="clickable" onClick={() => onSelect(r)}>
                   <td className="summary">
                     <button className="link-btn" onClick={(e) => { e.stopPropagation(); onSelect(r); }}>
@@ -139,8 +142,11 @@ function ReleaseList({
               )}
             </tbody>
           </table>
-          <div className="table-foot muted small">
-            {rows.length} of {data.length} releases across {projects.length} project{projects.length === 1 ? '' : 's'}
+          <div className="table-foot">
+            <span className="muted small">
+              {rows.length} of {data.length} releases across {projects.length} project{projects.length === 1 ? '' : 's'}
+            </span>
+            <Pagination {...pager} />
           </div>
         </div>
       )}
@@ -173,6 +179,7 @@ function ReleaseDetail({
     }
     return c;
   }, [data]);
+  const issuePager = usePagination(data ?? [], 25);
   const total = data?.length ?? 0;
   const pct = (n: number) => (total ? (n / total) * 100 : 0);
 
@@ -254,12 +261,18 @@ function ReleaseDetail({
                 </tr>
               </thead>
               <tbody>
-                {data.map((i) => <IssueRow key={i.key} issue={i} site={creds.site} />)}
+                {issuePager.slice.map((i) => <IssueRow key={i.key} issue={i} site={creds.site} />)}
                 {data.length === 0 && (
                   <tr><td colSpan={5} className="empty">No issues have this release as a Fix Version.</td></tr>
                 )}
               </tbody>
             </table>
+            {total > 0 && (
+              <div className="table-foot">
+                <span />
+                <Pagination {...issuePager} />
+              </div>
+            )}
           </div>
         </>
       )}
