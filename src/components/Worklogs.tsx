@@ -16,7 +16,7 @@ const DAY_TARGET = 8 * 3600;
 export default function Worklogs({ creds, onUnauthorized }: Props) {
   const [preset, setPreset] = useState<Preset | 'custom'>('this-week');
   const [range, setRange] = useState(() => presetRange('this-week'));
-  const [groupBy, setGroupBy] = useState<GroupBy>('task');
+  const [groupBy, setGroupBy] = useState<GroupBy>('day');
 
   const { data, loading, error, reload } = useAsync(
     (s) => api.worklogs(creds, range.from, range.to, s),
