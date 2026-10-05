@@ -1,3 +1,4 @@
+import axios from 'axios';
 import type { Credentials, Me, Task, TaskFilter, WorklogEntry } from '../shared/types';
 
 export class ApiError extends Error {
@@ -10,9 +11,8 @@ export class ApiError extends Error {
 }
 
 async function request<T>(creds: Credentials, path: string, signal?: AbortSignal): Promise<T> {
-  let res: Response;
   try {
-    res = await fetch(`${creds.proxy ?? ''}${path}`, {
+    const res = await axios.get<T>(`${creds.proxy ?? ''}${path}`, {
       signal,
       headers: {
         'x-jira-site': creds.site,
@@ -20,15 +20,16 @@ async function request<T>(creds: Credentials, path: string, signal?: AbortSignal
         'x-jira-token': creds.token,
       },
     });
+    return res.data;
   } catch (e) {
-    if ((e as Error).name === 'AbortError') throw e;
-    throw new ApiError(0, 'Cannot reach the dashboard server. Is it running?');
+    // Callers (useAsync, App) treat AbortError as "superseded request: ignore".
+    if (axios.isCancel(e)) throw new DOMException('Aborted', 'AbortError');
+    if (axios.isAxiosError<{ error?: string }>(e)) {
+      if (!e.response) throw new ApiError(0, 'Cannot reach the dashboard server. Is it running?');
+      throw new ApiError(e.response.status, e.response.data?.error ?? `Request failed (${e.response.status})`);
+    }
+    throw e;
   }
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(res.status, body.error ?? `Request failed (${res.status})`);
-  }
-  return (await res.json()) as T;
 }
 
 export const api = {

@@ -1,3 +1,4 @@
+import axios from 'axios';
 import type { Me, StatusCategory, Task, TaskFilter, WorklogEntry } from '../shared/types';
 
 export class JiraError extends Error {
@@ -59,32 +60,30 @@ export class JiraClient {
   }
 
   async get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
-    const url = new URL(`/rest/api/3${path}`, this.site);
-    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(url, {
+      // validateStatus: always resolve, so non-2xx handling stays in one place below.
+      const res = await axios.get(`${this.site}/rest/api/3${path}`, {
+        params,
         headers: { Authorization: this.auth, Accept: 'application/json' },
+        validateStatus: () => true,
+        timeout: 30_000,
       });
       if (res.status === 429 && attempt < 3) {
-        const wait = Number(res.headers.get('retry-after')) || 2 ** attempt;
+        const wait = Number(res.headers['retry-after']) || 2 ** attempt;
         await sleep(wait * 1000);
         continue;
       }
-      if (!res.ok) {
+      if (res.status >= 400) {
         if (res.status === 401) throw new JiraError(401, 'Jira rejected the email / API token');
         if (res.status === 403) throw new JiraError(403, 'Jira denied access to this resource');
-        const body = await res.text().catch(() => '');
-        let detail = body.slice(0, 300);
-        try {
-          const j = JSON.parse(body) as { errorMessages?: string[] };
-          if (j.errorMessages?.length) detail = j.errorMessages.join('; ');
-        } catch {
-          /* keep raw body */
-        }
+        const body = res.data as { errorMessages?: string[] } | string | undefined;
+        const detail =
+          typeof body === 'object' && body?.errorMessages?.length
+            ? body.errorMessages.join('; ')
+            : String(typeof body === 'string' ? body : JSON.stringify(body ?? '')).slice(0, 300);
         throw new JiraError(res.status, `Jira error ${res.status}: ${detail}`);
       }
-      return (await res.json()) as T;
+      return res.data as T;
     }
   }
 
