@@ -27,9 +27,16 @@ function pageList(current: number, pages: number): (number | '…')[] {
   return out;
 }
 
-type Pager = ReturnType<typeof usePagination>;
+interface PaginationProps {
+  page: number;
+  pages: number;
+  size: number;
+  total: number;
+  setPage: (page: number) => void;
+  setSize: (size: number) => void;
+}
 
-export default function Pagination({ page, pages, size, total, setPage, setSize }: Omit<Pager, 'slice'>) {
+export default function Pagination({ page, pages, size, total, setPage, setSize }: PaginationProps) {
   if (total === 0) return null;
   const from = (page - 1) * size + 1;
   const to = Math.min(page * size, total);

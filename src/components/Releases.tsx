@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Credentials, Release, ReleaseFilter, ReleaseIssue } from '../../shared/types';
-import { api } from '../api';
+import { api, type ReleaseOrder } from '../api';
 import { daysFromToday, describeDays, formatDate } from '../dates';
 import { useAsync } from '../useAsync';
 import ErrorBox from './ErrorBox';
@@ -37,40 +37,77 @@ export default function Releases({ creds, onUnauthorized }: Props) {
 
 /* ---------- list ---------- */
 
+const PROJECT_KEY = 'jira-dashboard.releaseProject';
+const SORTS: { id: ReleaseOrder; label: string }[] = [
+  { id: 'releaseDate', label: 'Release date: soonest first' },
+  { id: '-releaseDate', label: 'Release date: latest first' },
+  { id: 'startDate', label: 'Start date: oldest first' },
+  { id: '-startDate', label: 'Start date: newest first' },
+  { id: 'name', label: 'Name A–Z' },
+];
+
+function useDebounced<T>(value: T, ms: number) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
 function ReleaseList({
   creds,
   onSelect,
   onUnauthorized,
 }: Props & { onSelect: (r: Release) => void }) {
   const [filter, setFilter] = useState<ReleaseFilter>('unreleased');
-  const [project, setProject] = useState('');
+  const [projectKey, setProjectKey] = useState(() => {
+    try {
+      return localStorage.getItem(PROJECT_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
   const [query, setQuery] = useState('');
-  const { data, loading, error, reload } = useAsync((s) => api.releases(creds, s), [creds]);
+  const [sortChoice, setSortChoice] = useState<ReleaseOrder | null>(null);
+  const [size, setSize] = useState(25);
+  const dq = useDebounced(query, 350);
 
-  const projects = useMemo(
-    () => [...new Map((data ?? []).map((r) => [r.projectKey, r.projectName])).entries()].sort(),
-    [data],
+  const projectsReq = useAsync((s) => api.projects(creds, s), [creds]);
+  const project = useMemo(() => {
+    const list = projectsReq.data ?? [];
+    return list.find((p) => p.key === projectKey) ?? list[0] ?? null;
+  }, [projectsReq.data, projectKey]);
+
+  const orderBy: ReleaseOrder = sortChoice ?? (filter === 'unreleased' ? 'releaseDate' : '-releaseDate');
+
+  // The page number belongs to one set of filters; any change to them starts again at page 1.
+  const filterKey = JSON.stringify([project?.key, filter, dq, orderBy, size]);
+  const [pageState, setPageState] = useState({ key: '', page: 1 });
+  const page = pageState.key === filterKey ? pageState.page : 1;
+  const setPage = (p: number) => setPageState({ key: filterKey, page: p });
+
+  const releasesReq = useAsync(
+    (s) =>
+      project
+        ? api.releasePage(creds, { project, status: filter, query: dq, orderBy, page, pageSize: size }, s)
+        : Promise.resolve(null),
+    [creds, project?.key, filter, dq, orderBy, page, size],
   );
 
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = (data ?? []).filter(
-      (r) =>
-        (filter === 'all' || (filter === 'released' ? r.released : !r.released)) &&
-        (!project || r.projectKey === project) &&
-        (!q || r.name.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)),
-    );
-    const dateOf = (r: Release) => r.releaseDate ?? r.startDate ?? '';
-    // Upcoming first (soonest, undated last); released newest first.
-    return list.sort((a, b) => {
-      if (a.released !== b.released) return a.released ? 1 : -1;
-      const [da, db] = [dateOf(a), dateOf(b)];
-      if (!da || !db) return da ? -1 : db ? 1 : a.name.localeCompare(b.name);
-      return a.released ? db.localeCompare(da) : da.localeCompare(db);
-    });
-  }, [data, filter, project, query]);
+  function chooseProject(key: string) {
+    setProjectKey(key);
+    try {
+      localStorage.setItem(PROJECT_KEY, key);
+    } catch {
+      /* not remembered */
+    }
+  }
 
-  const pager = usePagination(rows);
+  const error = projectsReq.error ?? releasesReq.error;
+  const reload = projectsReq.error ? projectsReq.reload : releasesReq.reload;
+  const result = releasesReq.data;
+  const total = result?.total ?? 0;
 
   return (
     <section>
@@ -82,21 +119,30 @@ function ReleaseList({
             </button>
           ))}
         </div>
-        <select value={project} onChange={(e) => setProject(e.target.value)} aria-label="Project">
-          <option value="">All projects</option>
-          {projects.map(([key, name]) => (
-            <option key={key} value={key}>{name} ({key})</option>
+        <select
+          value={project?.key ?? ''}
+          onChange={(e) => chooseProject(e.target.value)}
+          aria-label="Project"
+          disabled={!projectsReq.data}
+        >
+          {(projectsReq.data ?? []).map((p) => (
+            <option key={p.key} value={p.key}>{p.name} ({p.key})</option>
+          ))}
+        </select>
+        <select value={orderBy} onChange={(e) => setSortChoice(e.target.value as ReleaseOrder)} aria-label="Sort">
+          {SORTS.map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
           ))}
         </select>
         <input type="search" placeholder="Search releases…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <button className="btn" onClick={reload} disabled={loading}>Refresh</button>
+        <button className="btn" onClick={reload} disabled={releasesReq.loading}>Refresh</button>
       </div>
 
       {error && <ErrorBox error={error} onRetry={reload} onUnauthorized={onUnauthorized} />}
-      {loading && !data && <p className="muted">Loading releases from all projects…</p>}
+      {!error && !result && <p className="muted">{projectsReq.data && !project ? 'No projects found.' : 'Loading releases…'}</p>}
 
-      {data && (
-        <div className={`card table-wrap ${loading ? 'stale' : ''}`}>
+      {result && (
+        <div className={`card table-wrap ${releasesReq.loading ? 'stale' : ''}`}>
           <table>
             <thead>
               <tr>
@@ -108,7 +154,7 @@ function ReleaseList({
               </tr>
             </thead>
             <tbody>
-              {pager.slice.map((r) => (
+              {result.releases.map((r) => (
                 <tr key={`${r.projectKey}-${r.id}`} className="clickable" onClick={() => onSelect(r)}>
                   <td className="summary">
                     <button className="link-btn" onClick={(e) => { e.stopPropagation(); onSelect(r); }}>
@@ -135,7 +181,7 @@ function ReleaseList({
                   </td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {result.releases.length === 0 && (
                 <tr>
                   <td colSpan={5} className="empty">No releases match.</td>
                 </tr>
@@ -143,10 +189,15 @@ function ReleaseList({
             </tbody>
           </table>
           <div className="table-foot">
-            <span className="muted small">
-              {rows.length} of {data.length} releases across {projects.length} project{projects.length === 1 ? '' : 's'}
-            </span>
-            <Pagination {...pager} />
+            <span className="muted small">{project?.name}</span>
+            <Pagination
+              page={page}
+              pages={Math.max(1, Math.ceil(total / size))}
+              size={size}
+              total={total}
+              setPage={setPage}
+              setSize={setSize}
+            />
           </div>
         </div>
       )}

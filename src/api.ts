@@ -235,21 +235,50 @@ async function worklogs(c: Credentials, from: string, to: string, signal?: Abort
   return results.flat().sort((a, b) => (a.started < b.started ? 1 : -1));
 }
 
-/** Every release version in every project the user can browse. */
-async function releases(c: Credentials, signal?: AbortSignal): Promise<Release[]> {
-  interface Page<T> {
-    values: T[];
-    isLast?: boolean;
-    total?: number;
-  }
-  const projects: { id: string; key: string; name: string }[] = [];
+export interface ProjectRef {
+  id: string;
+  key: string;
+  name: string;
+}
+
+/** Projects the user can browse (for the release project picker). */
+async function projects(c: Credentials, signal?: AbortSignal): Promise<ProjectRef[]> {
+  const out: ProjectRef[] = [];
   for (let startAt = 0; ; ) {
-    const page = await jiraGet<Page<(typeof projects)[number]>>(c, '/project/search', { startAt, maxResults: 50 }, signal);
-    projects.push(...page.values);
+    const page = await jiraGet<{ values: ProjectRef[]; isLast?: boolean; total?: number }>(
+      c,
+      '/project/search',
+      { startAt, maxResults: 50, orderBy: 'name' },
+      signal,
+    );
+    out.push(...page.values);
     startAt += page.values.length;
     if (page.isLast || page.values.length === 0 || startAt >= (page.total ?? Infinity)) break;
   }
+  return out;
+}
 
+export type ReleaseStatus = 'unreleased' | 'released' | 'all';
+export type ReleaseOrder = 'releaseDate' | '-releaseDate' | 'startDate' | '-startDate' | 'name';
+
+export interface ReleasePageQuery {
+  project: ProjectRef;
+  status: ReleaseStatus;
+  /** Case-insensitive match on name/description, done by Jira. */
+  query: string;
+  orderBy: ReleaseOrder;
+  page: number;
+  pageSize: number;
+}
+
+export interface ReleasePage {
+  releases: Release[];
+  /** Total versions matching the filters (not just this page). */
+  total: number;
+}
+
+/** One page of a project's release versions; paging, filtering and sorting happen in Jira. */
+async function releasePage(c: Credentials, q: ReleasePageQuery, signal?: AbortSignal): Promise<ReleasePage> {
   interface RawVersion {
     id: string;
     name: string;
@@ -259,50 +288,38 @@ async function releases(c: Credentials, signal?: AbortSignal): Promise<Release[]
     startDate?: string;
     releaseDate?: string;
   }
-  const today = new Date().toISOString().slice(0, 10);
-  const perProject: Release[][] = new Array(projects.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < projects.length) {
-      signal?.throwIfAborted();
-      const idx = next++;
-      const p = projects[idx];
-      const out: Release[] = [];
-      try {
-        for (let startAt = 0; ; ) {
-          const page = await jiraGet<Page<RawVersion>>(c, `/project/${p.key}/version`, { startAt, maxResults: 100 }, signal);
-          for (const v of page.values) {
-            const released = Boolean(v.released);
-            out.push({
-              id: v.id,
-              name: v.name,
-              description: v.description ?? '',
-              projectId: p.id,
-              projectKey: p.key,
-              projectName: p.name,
-              released,
-              archived: Boolean(v.archived),
-              overdue: !released && Boolean(v.releaseDate) && v.releaseDate! < today,
-              startDate: v.startDate ?? null,
-              releaseDate: v.releaseDate ?? null,
-            });
-          }
-          startAt += page.values.length;
-          if (page.isLast || page.values.length === 0 || startAt >= (page.total ?? Infinity)) break;
-        }
-      } catch (e) {
-        // Some projects (e.g. no releases feature, or no permission) reject this call: skip them.
-        if (e instanceof ApiError && [400, 403, 404].includes(e.status)) {
-          perProject[idx] = [];
-          continue;
-        }
-        throw e;
-      }
-      perProject[idx] = out;
-    }
+  const params: Record<string, string | number> = {
+    startAt: (q.page - 1) * q.pageSize,
+    maxResults: q.pageSize,
+    orderBy: q.orderBy,
   };
-  await Promise.all(Array.from({ length: Math.min(6, projects.length) }, worker));
-  return perProject.flat();
+  if (q.query.trim()) params.query = q.query.trim();
+  if (q.status !== 'all') params.status = q.status;
+
+  const res = await jiraGet<{ values: RawVersion[]; total: number }>(
+    c,
+    `/project/${encodeURIComponent(q.project.key)}/version`,
+    params,
+    signal,
+  );
+  const today = new Date().toISOString().slice(0, 10);
+  const releases = res.values.map((v): Release => {
+    const released = Boolean(v.released);
+    return {
+      id: v.id,
+      name: v.name,
+      description: v.description ?? '',
+      projectId: q.project.id,
+      projectKey: q.project.key,
+      projectName: q.project.name,
+      released,
+      archived: Boolean(v.archived),
+      overdue: !released && Boolean(v.releaseDate) && v.releaseDate! < today,
+      startDate: v.startDate ?? null,
+      releaseDate: v.releaseDate ?? null,
+    };
+  });
+  return { releases, total: res.total };
 }
 
 /** Issues whose Fix Version is the given release. */
@@ -334,4 +351,4 @@ async function releaseIssues(c: Credentials, versionId: string, signal?: AbortSi
   });
 }
 
-export const api = { me, tasks, worklogs, releases, releaseIssues };
+export const api = { me, tasks, worklogs, projects, releasePage, releaseIssues };
