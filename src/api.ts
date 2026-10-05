@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Credentials, Me, Task, TaskFilter, WorklogEntry } from '../shared/types';
+import type { Credentials, Me, StatusCategory, Task, TaskFilter, WorklogEntry } from '../shared/types';
 
 export class ApiError extends Error {
   constructor(
@@ -10,32 +10,219 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(creds: Credentials, path: string, signal?: AbortSignal): Promise<T> {
-  try {
-    const res = await axios.get<T>(`${creds.proxy ?? ''}${path}`, {
-      signal,
-      headers: {
-        'x-jira-site': creds.site,
-        'x-jira-email': creds.email,
-        'x-jira-token': creds.token,
-      },
-    });
-    return res.data;
-  } catch (e) {
-    // Callers (useAsync, App) treat AbortError as "superseded request: ignore".
-    if (axios.isCancel(e)) throw new DOMException('Aborted', 'AbortError');
-    if (axios.isAxiosError<{ error?: string }>(e)) {
-      if (!e.response) throw new ApiError(0, 'Cannot reach the dashboard server. Is it running?');
-      throw new ApiError(e.response.status, e.response.data?.error ?? `Request failed (${e.response.status})`);
+interface AdfNode {
+  type?: string;
+  text?: string;
+  content?: AdfNode[];
+}
+
+/** Flattens Atlassian Document Format to plain text. */
+function adfToText(node: AdfNode | string | null | undefined): string {
+  if (!node) return '';
+  if (typeof node === 'string') return node;
+  if (node.text) return node.text;
+  if (node.type === 'hardBreak') return '\n';
+  const blockContainer = ['doc', 'bulletList', 'orderedList', 'listItem', 'blockquote'];
+  return (node.content ?? []).map(adfToText).join(blockContainer.includes(node.type ?? '') ? '\n' : '');
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** UTF-8 safe Basic auth header (btoa alone breaks on non-Latin1 characters). */
+function basicAuth(email: string, token: string) {
+  const bytes = new TextEncoder().encode(`${email}:${token}`);
+  return 'Basic ' + btoa(String.fromCharCode(...bytes));
+}
+
+/** Talks to Jira Cloud directly from the browser with axios. */
+async function jiraGet<T>(
+  c: Credentials,
+  path: string,
+  params: Record<string, string | number> = {},
+  signal?: AbortSignal,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await axios.get(`${c.site}/rest/api/3${path}`, {
+        params,
+        signal,
+        headers: { Authorization: basicAuth(c.email, c.token), Accept: 'application/json' },
+        validateStatus: () => true,
+        timeout: 30_000,
+      });
+    } catch (e) {
+      if (axios.isCancel(e)) throw new DOMException('Aborted', 'AbortError');
+      // No response at all: in a browser this is almost always a CORS block, otherwise offline.
+      throw new ApiError(
+        0,
+        `Could not reach ${new URL(c.site).hostname}. The browser blocked the request (Jira does not allow ` +
+          'cross-origin API-token calls) or you are offline.',
+      );
     }
-    throw e;
+    if (res.status === 429 && attempt < 3) {
+      await sleep((Number(res.headers['retry-after']) || 2 ** attempt) * 1000);
+      continue;
+    }
+    if (res.status === 401) throw new ApiError(401, 'Jira rejected the email / API token');
+    if (res.status === 403) throw new ApiError(403, 'Jira denied access to this resource');
+    if (res.status >= 400) {
+      const body = res.data as { errorMessages?: string[] } | string | undefined;
+      const detail =
+        typeof body === 'object' && body?.errorMessages?.length
+          ? body.errorMessages.join('; ')
+          : String(typeof body === 'string' ? body : JSON.stringify(body ?? '')).slice(0, 300);
+      throw new ApiError(res.status, `Jira error ${res.status}: ${detail}`);
+    }
+    return res.data as T;
   }
 }
 
-export const api = {
-  me: (c: Credentials, signal?: AbortSignal) => request<Me>(c, '/api/me', signal),
-  tasks: (c: Credentials, filter: TaskFilter, signal?: AbortSignal) =>
-    request<Task[]>(c, `/api/tasks?filter=${filter}`, signal),
-  worklogs: (c: Credentials, from: string, to: string, signal?: AbortSignal) =>
-    request<WorklogEntry[]>(c, `/api/worklogs?from=${from}&to=${to}`, signal),
-};
+async function searchIssues<F>(c: Credentials, jql: string, fields: string[], signal?: AbortSignal, cap = 1000) {
+  interface Page {
+    issues: { key: string; fields: F }[];
+    nextPageToken?: string;
+    isLast?: boolean;
+  }
+  const out: Page['issues'] = [];
+  let nextPageToken: string | undefined;
+  do {
+    const page: Page = await jiraGet<Page>(
+      c,
+      '/search/jql',
+      { jql, fields: fields.join(','), maxResults: 100, ...(nextPageToken ? { nextPageToken } : {}) },
+      signal,
+    );
+    out.push(...page.issues);
+    nextPageToken = page.isLast ? undefined : page.nextPageToken;
+  } while (nextPageToken && out.length < cap);
+  return out;
+}
+
+async function me(c: Credentials, signal?: AbortSignal): Promise<Me> {
+  const u = await jiraGet<{ accountId: string; displayName: string; emailAddress?: string }>(c, '/myself', {}, signal);
+  return { accountId: u.accountId, displayName: u.displayName, email: u.emailAddress };
+}
+
+async function tasks(c: Credentials, filter: TaskFilter, signal?: AbortSignal): Promise<Task[]> {
+  const clause = {
+    open: 'statusCategory != Done',
+    done: 'statusCategory = Done AND updated >= -30d',
+    all: '(statusCategory != Done OR updated >= -30d)',
+  }[filter];
+
+  interface F {
+    summary: string;
+    status: { name: string; statusCategory?: { key: string } };
+    priority?: { name: string } | null;
+    issuetype: { name: string };
+    project: { key: string; name: string };
+    updated: string;
+    duedate: string | null;
+  }
+  const issues = await searchIssues<F>(
+    c,
+    `assignee = currentUser() AND ${clause} ORDER BY updated DESC`,
+    ['summary', 'status', 'priority', 'issuetype', 'project', 'updated', 'duedate'],
+    signal,
+  );
+  return issues.map((i) => {
+    const cat = i.fields.status.statusCategory?.key;
+    const statusCategory: StatusCategory = cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown';
+    return {
+      key: i.key,
+      summary: i.fields.summary,
+      status: i.fields.status.name,
+      statusCategory,
+      priority: i.fields.priority?.name ?? null,
+      issueType: i.fields.issuetype.name,
+      projectKey: i.fields.project.key,
+      projectName: i.fields.project.name,
+      updated: i.fields.updated,
+      dueDate: i.fields.duedate,
+    };
+  });
+}
+
+/** All of the current user's worklogs between two dates (inclusive), across every project. */
+async function worklogs(c: Credentials, from: string, to: string, signal?: AbortSignal): Promise<WorklogEntry[]> {
+  const mine = await me(c, signal);
+
+  // Pad the JQL window by a day each side: worklogDate is evaluated in the viewer's timezone
+  // while `started` carries its own offset. We filter precisely below.
+  const pad = (d: string, days: number) => {
+    const dt = new Date(`${d}T00:00:00Z`);
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
+  interface F {
+    summary: string;
+    status: { name: string };
+    issuetype: { name: string };
+    project: { key: string; name: string };
+  }
+  const issues = await searchIssues<F>(
+    c,
+    `worklogAuthor = currentUser() AND worklogDate >= "${pad(from, -1)}" AND worklogDate <= "${pad(to, 1)}"`,
+    ['summary', 'status', 'issuetype', 'project'],
+    signal,
+    500,
+  );
+
+  interface RawWorklog {
+    id: string;
+    author?: { accountId: string };
+    started: string;
+    timeSpentSeconds: number;
+    comment?: AdfNode | string;
+  }
+  const fetchIssueWorklogs = async (issue: (typeof issues)[number]) => {
+    const out: WorklogEntry[] = [];
+    let startAt = 0;
+    for (;;) {
+      const page = await jiraGet<{ worklogs: RawWorklog[]; total: number }>(
+        c,
+        `/issue/${issue.key}/worklog`,
+        { startAt, maxResults: 1000 },
+        signal,
+      );
+      for (const w of page.worklogs) {
+        if (w.author?.accountId !== mine.accountId) continue;
+        const date = w.started.slice(0, 10);
+        if (date < from || date > to) continue;
+        out.push({
+          id: w.id,
+          issueKey: issue.key,
+          summary: issue.fields.summary,
+          issueType: issue.fields.issuetype.name,
+          status: issue.fields.status.name,
+          projectKey: issue.fields.project.key,
+          projectName: issue.fields.project.name,
+          started: w.started,
+          date,
+          timeSpentSeconds: w.timeSpentSeconds,
+          comment: adfToText(w.comment).trim(),
+        });
+      }
+      startAt += page.worklogs.length;
+      if (page.worklogs.length === 0 || startAt >= page.total) break;
+    }
+    return out;
+  };
+
+  // Small worker pool so we stay well under Jira's rate limits.
+  const results: WorklogEntry[][] = new Array(issues.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < issues.length) {
+      signal?.throwIfAborted();
+      const idx = next++;
+      results[idx] = await fetchIssueWorklogs(issues[idx]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, issues.length) }, worker));
+
+  return results.flat().sort((a, b) => (a.started < b.started ? 1 : -1));
+}
+
+export const api = { me, tasks, worklogs };

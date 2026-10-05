@@ -3,8 +3,6 @@ export interface Credentials {
   site: string;
   email: string;
   token: string;
-  /** Base URL of the proxy server when the frontend is hosted separately (e.g. GitHub Pages). */
-  proxy?: string;
 }
 
 export interface Me {

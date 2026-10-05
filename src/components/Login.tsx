@@ -1,11 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { Credentials, Me } from '../../shared/types';
 import { api } from '../api';
-import { normalizeProxy, normalizeSite } from '../auth';
-
-// Set at build time for the static (GitHub Pages) build, which has no same-origin server.
-const STATIC_BUILD = Boolean(import.meta.env.VITE_STATIC);
-const DEFAULT_PROXY = (import.meta.env.VITE_API_BASE as string | undefined) ?? '';
+import { normalizeSite } from '../auth';
 
 interface Props {
   initialError?: string;
@@ -16,7 +12,6 @@ export default function Login({ initialError, onLogin }: Props) {
   const [site, setSite] = useState('');
   const [email, setEmail] = useState('');
   const [token, setToken] = useState('');
-  const [proxy, setProxy] = useState(DEFAULT_PROXY || (STATIC_BUILD ? 'http://localhost:3001' : ''));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError ?? '');
 
@@ -25,9 +20,9 @@ export default function Login({ initialError, onLogin }: Props) {
     setError('');
     let creds: Credentials;
     try {
-      creds = { site: normalizeSite(site), email: email.trim(), token: token.trim(), proxy: STATIC_BUILD ? normalizeProxy(proxy) : undefined };
+      creds = { site: normalizeSite(site), email: email.trim(), token: token.trim() };
     } catch {
-      setError('That does not look like a valid Jira site or proxy address.');
+      setError('That does not look like a valid Jira site address.');
       return;
     }
     setBusy(true);
@@ -78,21 +73,6 @@ export default function Login({ initialError, onLogin }: Props) {
             required
           />
         </label>
-        {STATIC_BUILD && (
-          <label>
-            Proxy server URL
-            <input
-              value={proxy}
-              onChange={(e) => setProxy(e.target.value)}
-              placeholder="http://localhost:3001"
-              autoComplete="off"
-              required
-            />
-            <span className="muted small">
-              Where this dashboard’s server runs (needed because Jira blocks direct browser calls).
-            </span>
-          </label>
-        )}
         <a
           className="hint"
           href="https://id.atlassian.com/manage-profile/security/api-tokens"
@@ -108,8 +88,8 @@ export default function Login({ initialError, onLogin }: Props) {
           {busy ? 'Checking…' : 'Sign in'}
         </button>
         <p className="muted small">
-          Your token is saved in this browser’s local storage and sent only to this dashboard’s own
-          server, which forwards it to Jira. Sign out to remove it.
+          Your token is saved in this browser’s local storage and sent only to your Jira site. Sign out
+          to remove it.
         </p>
       </form>
     </main>

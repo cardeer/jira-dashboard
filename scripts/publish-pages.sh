@@ -9,7 +9,7 @@ src=$(git rev-parse --short HEAD)
 wt=$(mktemp -d)
 trap 'git worktree remove --force "$wt" 2>/dev/null || true' EXIT
 
-VITE_STATIC=1 npm run build
+npm run build
 
 git worktree add -q --detach "$wt"
 (
