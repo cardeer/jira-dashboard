@@ -12,7 +12,7 @@ export class ApiError extends Error {
 async function request<T>(creds: Credentials, path: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetch(`${creds.proxy ?? ''}${path}`, {
       signal,
       headers: {
         'x-jira-site': creds.site,

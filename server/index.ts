@@ -7,6 +7,29 @@ import type { TaskFilter } from '../shared/types';
 
 const app = express();
 
+// Only needed when the frontend is hosted on another origin (e.g. GitHub Pages).
+// Auth is via request headers, not cookies, so no credentialed CORS is involved.
+const allowedOrigins = (process.env.CORS_ORIGIN ?? '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+app.use((req, res, next) => {
+  const origin = req.header('origin');
+  if (origin && (allowedOrigins.includes('*') || allowedOrigins.includes(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'x-jira-site, x-jira-email, x-jira-token');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    // Chrome's Private Network Access: lets an https page reach http://localhost.
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  }
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
 declare module 'express-serve-static-core' {
   interface Request {
     jira?: JiraClient;

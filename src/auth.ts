@@ -10,6 +10,14 @@ export function normalizeSite(input: string): string {
   return new URL(raw).origin;
 }
 
+/** Returns a clean proxy origin+path without trailing slash, or undefined when blank (same origin). */
+export function normalizeProxy(input: string): string | undefined {
+  const raw = input.trim();
+  if (!raw) return undefined;
+  const url = new URL(/^https?:\/\//i.test(raw) ? raw : `http://${raw}`);
+  return (url.origin + url.pathname).replace(/\/+$/, '');
+}
+
 export function loadCredentials(): Credentials | null {
   try {
     const raw = localStorage.getItem(KEY);
