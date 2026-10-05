@@ -43,3 +43,30 @@ export interface WorklogEntry {
 }
 
 export type TaskFilter = 'open' | 'done' | 'all';
+
+export interface Release {
+  id: string;
+  name: string;
+  description: string;
+  projectId: string;
+  projectKey: string;
+  projectName: string;
+  released: boolean;
+  archived: boolean;
+  /** Not released and the release date has passed. */
+  overdue: boolean;
+  startDate: string | null;
+  releaseDate: string | null;
+}
+
+export interface ReleaseIssue {
+  key: string;
+  summary: string;
+  status: string;
+  statusCategory: StatusCategory;
+  issueType: string;
+  priority: string | null;
+  assignee: string | null;
+}
+
+export type ReleaseFilter = 'unreleased' | 'released' | 'all';

@@ -3,10 +3,11 @@ import type { Credentials, Me } from '../shared/types';
 import { api, ApiError } from './api';
 import { clearCredentials, loadCredentials, saveCredentials } from './auth';
 import Login from './components/Login';
+import Releases from './components/Releases';
 import Tasks from './components/Tasks';
 import Worklogs from './components/Worklogs';
 
-type Tab = 'worklogs' | 'tasks';
+type Tab = 'worklogs' | 'tasks' | 'releases';
 
 export default function App() {
   const [creds, setCreds] = useState<Credentials | null>(() => loadCredentials());
@@ -109,6 +110,9 @@ export default function App() {
           <button role="tab" aria-selected={tab === 'tasks'} onClick={() => selectTab('tasks')}>
             My tasks
           </button>
+          <button role="tab" aria-selected={tab === 'releases'} onClick={() => selectTab('releases')}>
+            Releases
+          </button>
         </nav>
         <div className="user">
           <span className="avatar" aria-hidden>{initials}</span>
@@ -120,11 +124,9 @@ export default function App() {
         </div>
       </header>
       <main className="content">
-        {tab === 'worklogs' ? (
-          <Worklogs creds={creds} onUnauthorized={unauthorized} />
-        ) : (
-          <Tasks creds={creds} onUnauthorized={unauthorized} />
-        )}
+        {tab === 'worklogs' && <Worklogs creds={creds} onUnauthorized={unauthorized} />}
+        {tab === 'tasks' && <Tasks creds={creds} onUnauthorized={unauthorized} />}
+        {tab === 'releases' && <Releases creds={creds} onUnauthorized={unauthorized} />}
       </main>
     </div>
   );

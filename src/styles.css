@@ -183,3 +183,22 @@ td.caret { width: 28px; padding-right: 0; }
 .entry-main { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .entry-title { flex: 1; min-width: 0; }
 .entry-time { position: absolute; right: 16px; top: 10px; font-weight: 600; }
+
+/* releases */
+.row.wrap { flex-wrap: wrap; align-items: center; }
+.link-btn { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: var(--accent); cursor: pointer; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+.clamp { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status.overdue { background: var(--danger-bg); color: var(--danger); }
+.back { margin-bottom: 14px; }
+.detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+.detail-head h1 { margin-bottom: 8px; }
+.detail-desc { margin: 10px 0 0; max-width: 70ch; white-space: pre-line; }
+.small-value { font-size: 20px; }
+.progress { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--weekend); }
+.progress .seg.done { background: var(--ok); }
+.progress .seg.doing { background: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; color: var(--muted); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; background: var(--weekend); border: 1px solid var(--border); }
+.dot.done { background: var(--ok); border-color: var(--ok); }
+.dot.doing { background: var(--accent); border-color: var(--accent); }

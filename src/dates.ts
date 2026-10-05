@@ -90,3 +90,20 @@ export function relativeTime(iso: string): string {
   if (days < 30) return `${days}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
+
+export const formatDate = (iso: string) =>
+  fromISO(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+/** Whole days from today to `iso` (negative when in the past). */
+export function daysFromToday(iso: string): number {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((fromISO(iso).getTime() - today.getTime()) / 86400000);
+}
+
+export function describeDays(n: number): string {
+  if (n === 0) return 'today';
+  const abs = Math.abs(n);
+  const unit = `${abs} day${abs === 1 ? '' : 's'}`;
+  return n > 0 ? `in ${unit}` : `${unit} ago`;
+}
