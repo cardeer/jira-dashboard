@@ -22,7 +22,7 @@ export default function Login({ initialError, onLogin }: Props) {
     try {
       creds = { site: normalizeSite(site), email: email.trim(), token: token.trim() };
     } catch {
-      setError('That does not look like a valid Jira site address.');
+      setError('Enter your Jira Cloud address, like yourcompany.atlassian.net.');
       return;
     }
     setBusy(true);

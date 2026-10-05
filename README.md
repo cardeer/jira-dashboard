@@ -1,27 +1,28 @@
-# Jira Dashboard
+# Jira Dashboard (axios + rewrite)
 
 Personal dashboard for Jira Cloud: your assigned tasks, plus **your own** work logs across **all projects/teams**, with the task each entry was logged against.
 
-- React + TypeScript (Vite) frontend, Express + TypeScript proxy server
-- Sign in with Jira site + Atlassian email + [API token](https://id.atlassian.com/manage-profile/security/api-tokens) on first visit; credentials are saved in the browser's `localStorage`
-- The server is a stateless proxy (Jira Cloud blocks direct browser calls with API tokens); it never stores credentials
+- React + TypeScript (Vite), all HTTP via **axios**, no server code
+- Sign in with Jira site + Atlassian email + [API token](https://id.atlassian.com/manage-profile/security/api-tokens); saved in the browser's `localStorage`
+- Jira Cloud blocks cross-origin browser calls (CORS), so the browser calls a same-origin path instead:
+  `/api/jira/<site>/<path>` → `https://<site>.atlassian.net/<path>`
+  - **Vercel:** done by the rewrite in `vercel.json`
+  - **Local dev / `vite preview`:** done by a small plugin in `vite.config.ts`
 
 ## Run
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173  (proxy on :3001)
+npm run dev
 ```
 
-Production-style:
+Deploy to Vercel (framework preset: Vite). Only `<name>.atlassian.net` sites are supported.
 
-```bash
-npm run build && npm start   # http://127.0.0.1:3001
+## If the Vercel rewrite fails
+
+The destination uses a path parameter in the hostname (`https://:site.atlassian.net/:path*`). If Vercel doesn't
+substitute it, hard-code your site instead:
+
+```json
+{ "rewrites": [{ "source": "/api/jira/:site/:path*", "destination": "https://yourcompany.atlassian.net/:path*" }] }
 ```
-
-`PORT` / `HOST` env vars override the server bind address (default `127.0.0.1`).
-
-## How work logs are found
-
-1. `worklogAuthor = currentUser() AND worklogDate in range` finds every issue (any project) you logged on.
-2. Each issue's worklogs are fetched and filtered to your `accountId` and the exact date range.

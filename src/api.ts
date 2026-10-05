@@ -34,7 +34,13 @@ function basicAuth(email: string, token: string) {
   return 'Basic ' + btoa(String.fromCharCode(...bytes));
 }
 
-/** Talks to Jira Cloud directly from the browser with axios. */
+/**
+ * Same-origin path that the host rewrites to https://<site>.atlassian.net (see vercel.json and
+ * vite.config.ts). Calling Jira cross-origin from a browser is blocked by CORS.
+ */
+const jiraBase = (c: Credentials) => `/api/jira/${new URL(c.site).hostname.split('.')[0]}/rest/api/3`;
+
+/** Talks to Jira Cloud through the same-origin rewrite, using axios. */
 async function jiraGet<T>(
   c: Credentials,
   path: string,
@@ -44,7 +50,7 @@ async function jiraGet<T>(
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
-      res = await axios.get(`${c.site}/rest/api/3${path}`, {
+      res = await axios.get(`${jiraBase(c)}${path}`, {
         params,
         signal,
         headers: { Authorization: basicAuth(c.email, c.token), Accept: 'application/json' },
@@ -53,12 +59,7 @@ async function jiraGet<T>(
       });
     } catch (e) {
       if (axios.isCancel(e)) throw new DOMException('Aborted', 'AbortError');
-      // No response at all: in a browser this is almost always a CORS block, otherwise offline.
-      throw new ApiError(
-        0,
-        `Could not reach ${new URL(c.site).hostname}. The browser blocked the request (Jira does not allow ` +
-          'cross-origin API-token calls) or you are offline.',
-      );
+      throw new ApiError(0, 'Could not reach Jira (network error, or the /api/jira rewrite is not set up on this host).');
     }
     if (res.status === 429 && attempt < 3) {
       await sleep((Number(res.headers['retry-after']) || 2 ** attempt) * 1000);

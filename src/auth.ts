@@ -7,7 +7,10 @@ export function normalizeSite(input: string): string {
   let raw = input.trim();
   if (!raw.includes('.') && !raw.includes('/')) raw = `${raw}.atlassian.net`;
   if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-  return new URL(raw).origin;
+  const url = new URL(raw);
+  // Requests are rewritten to https://<name>.atlassian.net, so only Atlassian Cloud sites work.
+  if (!url.hostname.endsWith('.atlassian.net')) throw new Error('Not an atlassian.net site');
+  return url.origin;
 }
 
 export function loadCredentials(): Credentials | null {

@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/jira/:site/:path*",
+      "destination": "https://:site.atlassian.net/:path*"
+    }
+  ]
+}
