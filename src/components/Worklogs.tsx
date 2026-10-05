@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from 'react';
 import type { Credentials, WorklogEntry } from '../../shared/types';
 import { api } from '../api';
-import { PRESETS, eachDay, formatDay, formatDuration, formatHours, fromISO, isWeekend, presetRange, type Preset } from '../dates';
+import { PRESETS, eachDay, formatDay, formatDuration, formatHours, fromISO, isWeekend, presetRange, timeRange, type Preset } from '../dates';
 import { useAsync } from '../useAsync';
 import ErrorBox from './ErrorBox';
 
@@ -248,7 +248,7 @@ function ByTask({ groups, site, total }: { groups: TaskGroup[]; site: string; to
                     <tr key={e.id} className="sub">
                       <td />
                       <td colSpan={3}>
-                        <span className="muted">{formatDay(e.date)}</span>
+                        <span className="muted">{formatDay(e.date)}</span> <TimeRange entry={e} />
                         {e.comment && <span className="comment"> — {e.comment}</span>}
                       </td>
                       <td />
@@ -265,10 +265,22 @@ function ByTask({ groups, site, total }: { groups: TaskGroup[]; site: string; to
   );
 }
 
+function TimeRange({ entry }: { entry: WorklogEntry }) {
+  const r = timeRange(entry.started, entry.timeSpentSeconds);
+  return (
+    <span className="time-range" title={`Logged from ${r.from} to ${r.to}${r.nextDay ? ' (next day)' : ''}`}>
+      {r.from} – {r.to}
+      {r.nextDay && <sup>+1</sup>}
+    </span>
+  );
+}
+
 function ByDay({ entries, site }: { entries: WorklogEntry[]; site: string }) {
   const days = useMemo(() => {
     const m = new Map<string, WorklogEntry[]>();
     for (const e of entries) m.set(e.date, [...(m.get(e.date) ?? []), e]);
+    // Newest day first; within a day, earliest entry first so the from–to times read in order.
+    for (const list of m.values()) list.sort((a, b) => (a.started < b.started ? -1 : 1));
     return [...m.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [entries]);
 
@@ -290,6 +302,7 @@ function ByDay({ entries, site }: { entries: WorklogEntry[]; site: string }) {
                     <span className="entry-title">{e.summary}</span>
                     <span className="chip" title={e.projectName}>{e.projectKey}</span>
                   </div>
+                  <TimeRange entry={e} />
                   {e.comment && <div className="comment muted">{e.comment}</div>}
                   <span className="entry-time">{formatDuration(e.timeSpentSeconds)}</span>
                 </li>

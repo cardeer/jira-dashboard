@@ -107,3 +107,15 @@ export function describeDays(n: number): string {
   const unit = `${abs} day${abs === 1 ? '' : 's'}`;
   return n > 0 ? `in ${unit}` : `${unit} ago`;
 }
+
+/**
+ * "09:00 – 10:30" for a worklog. Uses the wall-clock time in Jira's `started` string
+ * (e.g. 2026-10-05T09:00:00.000+0700) so it matches what Jira shows, regardless of browser timezone.
+ */
+export function timeRange(started: string, seconds: number): { from: string; to: string; nextDay: boolean } {
+  const m = /T(\d{2}):(\d{2})/.exec(started);
+  const startMin = m ? Number(m[1]) * 60 + Number(m[2]) : 0;
+  const endMin = startMin + Math.round(seconds / 60);
+  const fmt = (mins: number) => `${pad(Math.floor(mins / 60) % 24)}:${pad(mins % 60)}`;
+  return { from: fmt(startMin), to: fmt(endMin), nextDay: endMin >= 24 * 60 };
+}

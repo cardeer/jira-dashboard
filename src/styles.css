@@ -211,3 +211,6 @@ td.caret { width: 28px; padding-right: 0; }
 .pager-pages { display: flex; align-items: center; gap: 4px; }
 .pager-pages .btn { min-width: 32px; padding: 4px 8px; }
 .pager-pages .btn.primary { cursor: default; }
+
+.time-range { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.day li .time-range { display: block; margin-top: 2px; }
