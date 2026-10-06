@@ -142,3 +142,40 @@ export const minutesBetween = (start: string, end: string) => {
   };
   return toMin(end) - toMin(start);
 };
+
+const HOURS_PER_DAY = 8;
+
+/**
+ * Jira-style duration → minutes, or null. Accepts "3h 30m", "3h30m", "2h", "45m", "1.5h",
+ * "1d" (= 8h, Jira's default working day), "3:30", and a bare number meaning hours ("2", "1.5").
+ */
+export function parseDuration(input: string): number | null {
+  const s = input.trim().toLowerCase();
+  if (!s) return null;
+  const clock = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (clock) {
+    const m = Number(clock[2]);
+    return m < 60 ? Number(clock[1]) * 60 + m : null;
+  }
+  if (/^\d+(\.\d+)?$/.test(s)) return Math.round(Number(s) * 60) || null;
+  const re = /(\d+(?:\.\d+)?)\s*(d|h|m)/g;
+  let total = 0;
+  let consumed = '';
+  for (const match of s.matchAll(re)) {
+    const n = Number(match[1]);
+    total += match[2] === 'd' ? n * HOURS_PER_DAY * 60 : match[2] === 'h' ? n * 60 : n;
+    consumed += match[0];
+  }
+  // Reject leftovers like "3x" or "abc".
+  if (!consumed || consumed.replace(/\s/g, '') !== s.replace(/\s/g, '')) return null;
+  return Math.round(total) || null;
+}
+
+/** "09:00" + 210 → { time: "12:30", nextDay: false } */
+export function addMinutes(time: string, minutes: number): { time: string; nextDay: boolean } {
+  const [h, m] = time.split(':').map(Number);
+  const total = h * 60 + m + minutes;
+  const wrapped = ((total % 1440) + 1440) % 1440;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return { time: `${pad(Math.floor(wrapped / 60))}:${pad(wrapped % 60)}`, nextDay: total >= 1440 };
+}

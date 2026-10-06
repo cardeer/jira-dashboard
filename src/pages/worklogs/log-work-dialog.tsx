@@ -18,9 +18,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { IssueStatusBadge } from '@/components/status-badge';
+import { DurationInput } from '@/components/duration-input';
 import { TimePicker } from '@/components/time-picker';
 import { api, ApiError, type IssueOption } from '@/api';
-import { formatDay, formatDuration, fromISO, minutesBetween, toISO } from '@/dates';
+import { addMinutes, formatDay, formatDuration, fromISO, minutesBetween, toISO } from '@/dates';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
@@ -44,8 +45,10 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
   // The task is kept between openings: logging several slots on the same task is common.
   const [issue, setIssue] = useState<IssueOption | null>(null);
   const [date, setDate] = useState(initialDate);
+  // Start + duration are the source of truth; the end time is derived (and editable).
   const [start, setStart] = useState<string>(PRESETS.morning.start);
-  const [end, setEnd] = useState<string>(PRESETS.morning.end);
+  const [minutes, setMinutes] = useState(minutesBetween(PRESETS.morning.start, PRESETS.morning.end));
+  const { time: end, nextDay } = addMinutes(start, minutes);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -57,12 +60,17 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
     setError('');
   }, [open, initialDate]);
 
+  /** Minutes from `from` to `to`; an earlier `to` means the next day. */
+  const spanTo = (from: string, to: string) => {
+    const diff = minutesBetween(from, to);
+    return diff > 0 ? diff : diff + 24 * 60;
+  };
+  const setEnd = (e: string) => setMinutes(spanTo(start, e));
   const setRange = (s: string, e: string) => {
     setStart(s);
-    setEnd(e);
+    setMinutes(spanTo(s, e));
   };
 
-  const minutes = minutesBetween(start, end);
   const preset = (Object.keys(PRESETS) as PresetId[]).find((p) => PRESETS[p].start === start && PRESETS[p].end === end) ?? '';
   const valid = Boolean(issue) && minutes > 0 && Boolean(date);
 
@@ -115,8 +123,7 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
                 value={preset}
                 onValueChange={(v) => {
                   if (!v) return;
-                  setStart(PRESETS[v as PresetId].start);
-                  setEnd(PRESETS[v as PresetId].end);
+                  setRange(PRESETS[v as PresetId].start, PRESETS[v as PresetId].end);
                 }}
               >
                 {(Object.keys(PRESETS) as PresetId[]).map((p) => (
@@ -127,15 +134,26 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
                 ))}
               </ToggleGroup>
             </div>
-            <div className="flex items-center gap-2">
-              <TimePicker value={start} onChange={setStart} onRange={setRange} aria-label="Start time" />
-              <span className="text-muted-foreground">–</span>
-              <TimePicker value={end} onChange={setEnd} onRange={setRange} aria-label="End time" />
-              <span className={cn('ml-auto text-sm tabular-nums', minutes > 0 ? 'font-semibold' : 'text-destructive')}>
-                {minutes > 0 ? formatDuration(minutes * 60) : 'End must be after start'}
-              </span>
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="grid gap-1">
+                <span className="text-xs text-muted-foreground">Start</span>
+                <TimePicker value={start} onChange={setStart} onRange={setRange} aria-label="Start time" />
+              </div>
+              <span className="pb-1.5 text-muted-foreground">–</span>
+              <div className="grid gap-1">
+                <span className="text-xs text-muted-foreground">
+                  End{nextDay && <span className="ml-1 font-medium text-foreground">(next day)</span>}
+                </span>
+                <TimePicker value={end} onChange={setEnd} onRange={setRange} aria-label="End time" />
+              </div>
+              <div className="ml-auto grid gap-1">
+                <label htmlFor="worklog-duration" className="text-xs text-muted-foreground">Time spent</label>
+                <DurationInput id="worklog-duration" value={minutes} onChange={setMinutes} className="w-28 font-semibold" />
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">Type a time like 930 or 13:45, or a range like 9-12:30.</p>
+            <p className="text-xs text-muted-foreground">
+              Type the time spent like <b>3h 30m</b>, <b>2h</b> or <b>45m</b> (end time follows), or set start and end.
+            </p>
           </div>
 
           <div className="grid gap-1.5">
