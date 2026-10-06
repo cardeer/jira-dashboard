@@ -13,12 +13,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { IssueStatusBadge } from '@/components/status-badge';
+import { TimePicker } from '@/components/time-picker';
 import { api, ApiError, type IssueOption } from '@/api';
 import { formatDay, formatDuration, fromISO, minutesBetween, toISO } from '@/dates';
 import { useSession } from '@/lib/session';
@@ -123,9 +123,9 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
               </ToggleGroup>
             </div>
             <div className="flex items-center gap-2">
-              <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} aria-label="Start time" className="w-32" required />
+              <TimePicker value={start} onChange={setStart} aria-label="Start time" className="w-28" />
               <span className="text-muted-foreground">–</span>
-              <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} aria-label="End time" className="w-32" required />
+              <TimePicker value={end} onChange={setEnd} aria-label="End time" className="w-28" />
               <span className={cn('ml-auto text-sm tabular-nums', minutes > 0 ? 'font-semibold' : 'text-destructive')}>
                 {minutes > 0 ? formatDuration(minutes * 60) : 'End must be after start'}
               </span>
