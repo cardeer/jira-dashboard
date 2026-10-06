@@ -1,12 +1,17 @@
 {
-  "rewrites": [
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "routes": [
     {
-      "source": "/api/jira/:site/:path*",
-      "destination": "https://:site.atlassian.net/:path*"
+      "src": "/api/jira/([a-z0-9-]+)/(.*)",
+      "dest": "https://$1.atlassian.net/$2",
+      "transforms": [
+        { "type": "request.headers", "op": "set", "target": { "key": "user-agent" }, "args": "jira-dashboard-proxy" },
+        { "type": "request.headers", "op": "delete", "target": { "key": "origin" } },
+        { "type": "request.headers", "op": "delete", "target": { "key": "referer" } },
+        { "type": "request.headers", "op": "delete", "target": { "key": "cookie" } }
+      ]
     },
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
-    }
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

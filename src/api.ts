@@ -96,6 +96,13 @@ async function jiraRequest<T>(
         : res.status === 403
           ? 'Jira denied access to this resource'
           : String(typeof body === 'string' ? body : JSON.stringify(body ?? '')).slice(0, 300);
+      if (res.status === 403 && /XSRF check failed/i.test(String(res.data))) {
+        throw new ApiError(
+          403,
+          'Jira rejected the write (XSRF check failed): the /api/jira proxy must send a non-browser User-Agent. ' +
+            'Redeploy with the current vercel.json.',
+        );
+      }
       throw new ApiError(res.status, res.status === 403 ? detail : `Jira error ${res.status}: ${detail}`);
     }
     return res.data as T;
@@ -422,6 +429,8 @@ const RECENT_JQL = '(assignee = currentUser() OR worklogAuthor = currentUser()) 
 const KEY_QUERY_RE = /^(?:([A-Za-z][A-Za-z0-9_]*?)-?)?(\d+)$/;
 /** Jira's bulk fetch accepts at most 100 keys. */
 const BULK_LIMIT = 100;
+/** How many candidate keys to try one by one if bulk fetch is unavailable. */
+const GET_FALLBACK_LIMIT = 12;
 
 /**
  * Project keys to try for a bare issue number, your recently used projects first.
@@ -448,14 +457,31 @@ function projectKeysFor(c: Credentials): Promise<string[]> {
 /** Fetch issues by key; keys that don't exist are simply skipped (unlike `key in (...)` in JQL). */
 async function fetchByKeys(c: Credentials, keys: string[], signal?: AbortSignal): Promise<PickerIssue[]> {
   if (keys.length === 0) return [];
-  const res = await jiraRequest<{ issues?: PickerIssue[] }>(
-    c,
-    'POST',
-    '/issue/bulkfetch',
-    { data: { issueIdsOrKeys: keys.slice(0, BULK_LIMIT), fields: PICKER_FIELDS } },
-    signal,
-  );
-  return res.issues ?? [];
+  try {
+    const res = await jiraRequest<{ issues?: PickerIssue[] }>(
+      c,
+      'POST',
+      '/issue/bulkfetch',
+      { data: { issueIdsOrKeys: keys.slice(0, BULK_LIMIT), fields: PICKER_FIELDS } },
+      signal,
+    );
+    return res.issues ?? [];
+  } catch (e) {
+    // Bulk fetch is a POST, which Jira may reject (403 XSRF) depending on the proxy.
+    // Fall back to plain GETs for the first few candidates (recent projects come first).
+    if (!(e instanceof ApiError) || e.status === 401) throw e;
+    const found = await Promise.all(
+      keys.slice(0, GET_FALLBACK_LIMIT).map((key) =>
+        jiraGet<PickerIssue>(c, `/issue/${encodeURIComponent(key)}`, { fields: PICKER_FIELDS.join(',') }, signal).catch(
+          (err: unknown) => {
+            if (err instanceof ApiError && err.status === 401) throw err;
+            return null; // 404: no such issue in that project
+          },
+        ),
+      ),
+    );
+    return found.filter((i): i is PickerIssue => i !== null);
+  }
 }
 
 /**

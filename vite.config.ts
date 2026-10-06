@@ -23,7 +23,8 @@ function jiraRewrite(): Plugin {
         const v = req.headers[name];
         return Array.isArray(v) ? v[0] : v;
       };
-      const forward: Record<string, string> = { accept: 'application/json' };
+      // Same as vercel.json: a non-browser User-Agent, or Jira rejects writes with "XSRF check failed".
+      const forward: Record<string, string> = { accept: 'application/json', 'user-agent': 'jira-dashboard-proxy' };
       for (const name of ['authorization', 'content-type', 'x-atlassian-token']) {
         const v = header(name);
         if (v) forward[name] = v;
