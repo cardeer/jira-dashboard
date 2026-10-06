@@ -57,6 +57,11 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
     setError('');
   }, [open, initialDate]);
 
+  const setRange = (s: string, e: string) => {
+    setStart(s);
+    setEnd(e);
+  };
+
   const minutes = minutesBetween(start, end);
   const preset = (Object.keys(PRESETS) as PresetId[]).find((p) => PRESETS[p].start === start && PRESETS[p].end === end) ?? '';
   const valid = Boolean(issue) && minutes > 0 && Boolean(date);
@@ -123,13 +128,14 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
               </ToggleGroup>
             </div>
             <div className="flex items-center gap-2">
-              <TimePicker value={start} onChange={setStart} aria-label="Start time" className="w-28" />
+              <TimePicker value={start} onChange={setStart} onRange={setRange} aria-label="Start time" />
               <span className="text-muted-foreground">–</span>
-              <TimePicker value={end} onChange={setEnd} aria-label="End time" className="w-28" />
+              <TimePicker value={end} onChange={setEnd} onRange={setRange} aria-label="End time" />
               <span className={cn('ml-auto text-sm tabular-nums', minutes > 0 ? 'font-semibold' : 'text-destructive')}>
                 {minutes > 0 ? formatDuration(minutes * 60) : 'End must be after start'}
               </span>
             </div>
+            <p className="text-xs text-muted-foreground">Type a time like 930 or 13:45, or a range like 9-12:30.</p>
           </div>
 
           <div className="grid gap-1.5">
