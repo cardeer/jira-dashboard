@@ -322,6 +322,36 @@ async function releasePage(c: Credentials, q: ReleasePageQuery, signal?: AbortSi
   return { releases, total: res.total };
 }
 
+/** A single release by id (used when a release detail URL is opened directly). */
+async function release(c: Credentials, versionId: string, signal?: AbortSignal): Promise<Release> {
+  const v = await jiraGet<{
+    id: string;
+    name: string;
+    description?: string;
+    archived?: boolean;
+    released?: boolean;
+    startDate?: string;
+    releaseDate?: string;
+    projectId: number | string;
+  }>(c, `/version/${encodeURIComponent(versionId)}`, {}, signal);
+  const p = await jiraGet<ProjectRef>(c, `/project/${v.projectId}`, {}, signal);
+  const released = Boolean(v.released);
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    id: v.id,
+    name: v.name,
+    description: v.description ?? '',
+    projectId: String(p.id),
+    projectKey: p.key,
+    projectName: p.name,
+    released,
+    archived: Boolean(v.archived),
+    overdue: !released && Boolean(v.releaseDate) && v.releaseDate! < today,
+    startDate: v.startDate ?? null,
+    releaseDate: v.releaseDate ?? null,
+  };
+}
+
 /** Issues whose Fix Version is the given release. */
 async function releaseIssues(c: Credentials, versionId: string, signal?: AbortSignal): Promise<ReleaseIssue[]> {
   interface F {
@@ -351,4 +381,4 @@ async function releaseIssues(c: Credentials, versionId: string, signal?: AbortSi
   });
 }
 
-export const api = { me, tasks, worklogs, projects, releasePage, releaseIssues };
+export const api = { me, tasks, worklogs, projects, releasePage, release, releaseIssues };

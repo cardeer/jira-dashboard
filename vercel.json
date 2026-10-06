@@ -3,6 +3,10 @@
     {
       "source": "/api/jira/:site/:path*",
       "destination": "https://:site.atlassian.net/:path*"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
     }
   ]
 }

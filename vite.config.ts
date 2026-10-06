@@ -1,5 +1,7 @@
+import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 /**
  * Dev/preview stand-in for the rewrite in vercel.json:
@@ -38,6 +40,8 @@ function jiraRewrite(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), jiraRewrite()],
-  base: './',
+  plugins: [react(), tailwindcss(), jiraRewrite()],
+  // Absolute base: client-side routes like /releases/PAY/123 must still load /assets/*.
+  base: '/',
+  resolve: { alias: { '@': path.resolve(import.meta.dirname, './src') } },
 });

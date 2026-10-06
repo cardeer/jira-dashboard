@@ -1,65 +1,60 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { Credentials, Me } from '../shared/types';
-import { api, ApiError } from './api';
-import { clearCredentials, loadCredentials, saveCredentials } from './auth';
-import Login from './components/Login';
-import Releases from './components/Releases';
-import Tasks from './components/Tasks';
-import Worklogs from './components/Worklogs';
+import { lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes } from 'react-router';
+import { Loader2Icon } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { AppShell } from '@/components/app-shell';
+import { api, ApiError } from '@/api';
+import { clearCredentials, loadCredentials, saveCredentials } from '@/auth';
+import { SessionContext, type Session } from '@/lib/session';
+import { LoginPage } from '@/pages/login';
 
-type Tab = 'worklogs' | 'tasks' | 'releases';
+// Route-level code splitting keeps the first load small (charts, calendar etc. load on demand).
+const WorklogsPage = lazy(() => import('@/pages/worklogs').then((m) => ({ default: m.WorklogsPage })));
+const TasksPage = lazy(() => import('@/pages/tasks').then((m) => ({ default: m.TasksPage })));
+const ReleasesPage = lazy(() => import('@/pages/releases').then((m) => ({ default: m.ReleasesPage })));
+const ReleaseDetailPage = lazy(() => import('@/pages/release-detail').then((m) => ({ default: m.ReleaseDetailPage })));
+import type { Credentials, Me } from '../shared/types';
 
 export default function App() {
   const [creds, setCreds] = useState<Credentials | null>(() => loadCredentials());
   const [me, setMe] = useState<Me | null>(null);
-  const [checking, setChecking] = useState(() => loadCredentials() !== null);
   const [loginError, setLoginError] = useState('');
   const [fatal, setFatal] = useState('');
-  const [tab, setTab] = useState<Tab>(() => (localStorage.getItem('jira-dashboard.tab') as Tab) || 'worklogs');
+  const [attempt, setAttempt] = useState(0);
 
   const signOut = useCallback((message = '') => {
     clearCredentials();
     setCreds(null);
     setMe(null);
-    setChecking(false);
     setLoginError(message);
   }, []);
 
-  // On load, validate whatever token is in storage.
+  // Validate whatever token is in storage before showing any page.
   useEffect(() => {
     if (!creds || me) return;
     const ctrl = new AbortController();
-    setChecking(true);
     setFatal('');
-    api.me(creds, ctrl.signal).then(
-      (m) => {
-        setMe(m);
-        setChecking(false);
-      },
-      (e: unknown) => {
-        if ((e as Error).name === 'AbortError') return;
-        if (e instanceof ApiError && e.status === 401) signOut('Your saved API token was rejected. Please sign in again.');
-        else {
-          setFatal((e as Error).message);
-          setChecking(false);
-        }
-      },
-    );
+    api.me(creds, ctrl.signal).then(setMe, (e: unknown) => {
+      if ((e as Error).name === 'AbortError') return;
+      if (e instanceof ApiError && e.status === 401) signOut('Your saved API token was rejected. Please sign in again.');
+      else setFatal((e as Error).message);
+    });
     return () => ctrl.abort();
-  }, [creds, me, signOut]);
+  }, [creds, me, signOut, attempt]);
 
-  function selectTab(t: Tab) {
-    setTab(t);
-    try {
-      localStorage.setItem('jira-dashboard.tab', t);
-    } catch {
-      /* storage unavailable: tab just won't be remembered */
-    }
-  }
+  const session = useMemo<Session | null>(
+    () =>
+      creds && me
+        ? { creds, me, signOut, onUnauthorized: () => signOut('Jira rejected your API token. Please sign in again.') }
+        : null,
+    [creds, me, signOut],
+  );
 
   if (!creds) {
+    // Stay on the current URL: after signing in, the requested page (deep link) renders.
     return (
-      <Login
+      <LoginPage
         initialError={loginError}
         onLogin={(c, m) => {
           saveCredentials(c);
@@ -71,63 +66,41 @@ export default function App() {
     );
   }
 
-  if (!me) {
+  if (!session) {
     return (
-      <main className="login">
-        <div className="card login-card">
-          {checking ? (
-            <p className="muted">Signing in…</p>
-          ) : (
-            <>
-              <div className="alert" role="alert">{fatal || 'Could not sign in.'}</div>
-              <div className="row">
-                <button className="btn primary" onClick={() => setCreds({ ...creds })}>Retry</button>
-                <button className="btn" onClick={() => signOut()}>Use a different token</button>
+      <main className="grid min-h-svh place-items-center p-4">
+        {fatal ? (
+          <Alert variant="destructive" className="max-w-md">
+            <AlertTitle>Couldn’t sign in</AlertTitle>
+            <AlertDescription className="grid gap-3">
+              <span>{fatal}</span>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={() => setAttempt((a) => a + 1)}>Retry</Button>
+                <Button size="sm" variant="outline" onClick={() => signOut()}>Use a different token</Button>
               </div>
-            </>
-          )}
-        </div>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin" /> Signing in…
+          </p>
+        )}
       </main>
     );
   }
 
-  const unauthorized = () => signOut('Jira rejected your API token. Please sign in again.');
-  const initials = me.displayName
-    .split(/\s+/)
-    .map((p) => p[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
-
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">Jira Dashboard</div>
-        <nav className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'worklogs'} onClick={() => selectTab('worklogs')}>
-            Work logs
-          </button>
-          <button role="tab" aria-selected={tab === 'tasks'} onClick={() => selectTab('tasks')}>
-            My tasks
-          </button>
-          <button role="tab" aria-selected={tab === 'releases'} onClick={() => selectTab('releases')}>
-            Releases
-          </button>
-        </nav>
-        <div className="user">
-          <span className="avatar" aria-hidden>{initials}</span>
-          <div className="user-text">
-            <strong>{me.displayName}</strong>
-            <span className="muted small">{new URL(creds.site).hostname}</span>
-          </div>
-          <button className="btn" onClick={() => signOut()}>Sign out</button>
-        </div>
-      </header>
-      <main className="content">
-        {tab === 'worklogs' && <Worklogs creds={creds} onUnauthorized={unauthorized} />}
-        {tab === 'tasks' && <Tasks creds={creds} onUnauthorized={unauthorized} />}
-        {tab === 'releases' && <Releases creds={creds} onUnauthorized={unauthorized} />}
-      </main>
-    </div>
+    <SessionContext.Provider value={session}>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route index element={<Navigate to="/worklogs" replace />} />
+          <Route path="worklogs" element={<WorklogsPage />} />
+          <Route path="tasks" element={<TasksPage />} />
+          <Route path="releases" element={<ReleasesPage />} />
+          <Route path="releases/:projectKey/:versionId" element={<ReleaseDetailPage />} />
+          <Route path="*" element={<Navigate to="/worklogs" replace />} />
+        </Route>
+      </Routes>
+    </SessionContext.Provider>
   );
 }
