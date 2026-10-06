@@ -4,19 +4,42 @@ import { api } from '../api';
 import { PRESETS, eachDay, formatDay, formatDuration, formatHours, fromISO, isWeekend, presetRange, timeRange, type Preset } from '../dates';
 import { useAsync } from '../useAsync';
 import ErrorBox from './ErrorBox';
+import Timesheet from './Timesheet';
 
 interface Props {
   creds: Credentials;
   onUnauthorized: () => void;
 }
 
-type GroupBy = 'task' | 'day';
+type View = 'sheet' | 'day' | 'task' | 'charts';
+const VIEWS: { id: View; label: string }[] = [
+  { id: 'sheet', label: 'Timesheet' },
+  { id: 'day', label: 'By day' },
+  { id: 'task', label: 'By task' },
+  { id: 'charts', label: 'Visualization' },
+];
+const VIEW_KEY = 'jira-dashboard.worklogView';
 const DAY_TARGET = 8 * 3600;
 
 export default function Worklogs({ creds, onUnauthorized }: Props) {
   const [preset, setPreset] = useState<Preset | 'custom'>('this-week');
   const [range, setRange] = useState(() => presetRange('this-week'));
-  const [groupBy, setGroupBy] = useState<GroupBy>('day');
+  const [view, setView] = useState<View>(() => {
+    try {
+      const v = localStorage.getItem(VIEW_KEY) as View | null;
+      return v && VIEWS.some((x) => x.id === v) ? v : 'sheet';
+    } catch {
+      return 'sheet';
+    }
+  });
+  function chooseView(v: View) {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* not remembered */
+    }
+  }
 
   const { data, loading, error, reload } = useAsync(
     (s) => api.worklogs(creds, range.from, range.to, s),
@@ -58,41 +81,48 @@ export default function Worklogs({ creds, onUnauthorized }: Props) {
       {error && <ErrorBox error={error} onRetry={reload} onUnauthorized={onUnauthorized} />}
       {loading && !data && <p className="muted">Loading work logs across all projects…</p>}
 
+      <nav className="view-tabs" role="tablist" aria-label="Work log view">
+        {VIEWS.map((v) => (
+          <button key={v.id} role="tab" aria-selected={view === v.id} onClick={() => chooseView(v.id)}>
+            {v.label}
+          </button>
+        ))}
+        {data && <span className="view-tabs-total muted">Total {formatDuration(stats.total)}</span>}
+      </nav>
+
       {data && (
         <div className={loading ? 'stale' : undefined}>
-          <div className="stats">
-            <Stat label="Total logged" value={formatDuration(stats.total)} />
-            <Stat label="Days with logs" value={`${stats.daysLogged}`} sub={`of ${stats.days} in range`} />
-            <Stat label="Avg per logged day" value={stats.daysLogged ? formatDuration(stats.total / stats.daysLogged) : '—'} />
-            <Stat label="Tasks worked on" value={`${stats.byTask.length}`} sub={`${stats.byProject.length} project${stats.byProject.length === 1 ? '' : 's'}`} />
-          </div>
+          {view === 'sheet' && <Timesheet entries={data} from={range.from} to={range.to} site={creds.site} />}
 
-          <div className="grid-2">
-            <div className="card pad">
-              <h2>Hours per day</h2>
-              <DayChart perDay={stats.perDay} entries={data} />
-            </div>
-            <div className="card pad">
-              <h2>By project / team</h2>
-              <ProjectBars projects={stats.byProject} total={stats.total} />
-            </div>
-          </div>
-
-          <div className="section-head">
-            <h2>Logged work</h2>
-            <div className="segmented" role="group" aria-label="Group by">
-              <button aria-pressed={groupBy === 'task'} onClick={() => setGroupBy('task')}>By task</button>
-              <button aria-pressed={groupBy === 'day'} onClick={() => setGroupBy('day')}>By day</button>
-            </div>
-          </div>
-
-          {data.length === 0 ? (
-            <div className="card pad empty">No work logged in this period.</div>
-          ) : groupBy === 'task' ? (
-            <ByTask groups={stats.byTask} site={creds.site} total={stats.total} />
-          ) : (
-            <ByDay entries={data} site={creds.site} />
+          {view === 'charts' && (
+            <>
+              <div className="stats">
+                <Stat label="Total logged" value={formatDuration(stats.total)} />
+                <Stat label="Days with logs" value={`${stats.daysLogged}`} sub={`of ${stats.days} in range`} />
+                <Stat label="Avg per logged day" value={stats.daysLogged ? formatDuration(stats.total / stats.daysLogged) : '—'} />
+                <Stat label="Tasks worked on" value={`${stats.byTask.length}`} sub={`${stats.byProject.length} project${stats.byProject.length === 1 ? '' : 's'}`} />
+              </div>
+              <div className="grid-2">
+                <div className="card pad">
+                  <h2>Hours per day</h2>
+                  <DayChart perDay={stats.perDay} entries={data} />
+                </div>
+                <div className="card pad">
+                  <h2>By project / team</h2>
+                  <ProjectBars projects={stats.byProject} total={stats.total} />
+                </div>
+              </div>
+            </>
           )}
+
+          {(view === 'day' || view === 'task') &&
+            (data.length === 0 ? (
+              <div className="card pad empty">No work logged in this period.</div>
+            ) : view === 'task' ? (
+              <ByTask groups={stats.byTask} site={creds.site} total={stats.total} />
+            ) : (
+              <ByDay entries={data} site={creds.site} />
+            ))}
         </div>
       )}
     </section>

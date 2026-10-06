@@ -235,3 +235,56 @@ td.caret { width: 28px; padding-right: 0; }
 .tip-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 .tip-task b { color: var(--text); font-weight: 600; }
 .tip-more { color: var(--muted); margin-top: 2px; }
+
+/* work log view tabs */
+.view-tabs { display: flex; align-items: flex-end; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.view-tabs button {
+  font: inherit; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  padding: 8px 14px; color: var(--muted); cursor: pointer;
+}
+.view-tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.view-tabs-total { margin-left: auto; padding: 8px 4px; font-size: 13px; }
+
+/* timesheet grid */
+.sheet-wrap { overflow: auto; max-height: calc(100vh - 230px); }
+.sheet { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 13px; }
+.sheet th, .sheet td { padding: 6px 8px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); vertical-align: middle; }
+.sheet thead th { position: sticky; z-index: 2; background: var(--surface); text-align: center; }
+.sheet thead tr:first-child th { top: 0; }
+.sheet thead tr:nth-child(2) th { top: 33px; }
+.sheet .week-head { color: var(--accent); font-weight: 600; white-space: nowrap; }
+.sheet .task-col {
+  position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left;
+  width: 340px; min-width: 340px; max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sheet thead .task-col { z-index: 3; }
+.sheet .task-summary { margin-left: 4px; }
+.sheet .day-col { width: 46px; min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
+.sheet th.day-col { line-height: 1.2; }
+.sheet .day-num { display: block; font-size: 14px; font-weight: 600; color: var(--text); }
+.sheet .day-name { display: block; font-size: 10px; color: var(--muted); letter-spacing: 0.04em; }
+.sheet th.weekend .day-num, .sheet th.weekend .day-name { color: var(--danger); }
+.sheet td.weekend {
+  background-color: var(--weekend);
+  background-image: repeating-linear-gradient(45deg, transparent 0 6px, color-mix(in srgb, var(--border) 70%, transparent) 6px 7px);
+}
+.sheet th.today { background: var(--accent-soft); }
+.sheet th.today .day-num { color: var(--accent); }
+.sheet td.today { background-color: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
+.sheet .week-total, .sheet .total-col { text-align: center; font-weight: 600; background: var(--bg); min-width: 54px; font-variant-numeric: tabular-nums; }
+.sheet thead .total-col, .sheet thead .week-total { background: var(--surface); font-size: 12px; color: var(--muted); }
+.sheet tbody tr:not(.group-row):hover td { background-color: var(--accent-soft); }
+.sheet tbody tr:not(.group-row):hover td.task-col { background: var(--accent-soft); }
+.sheet .group-row td { background: var(--bg); font-weight: 600; cursor: pointer; }
+.sheet .group-row td.task-col { background: var(--bg); }
+.sheet tfoot td { position: sticky; bottom: 0; background: var(--surface); font-weight: 700; text-align: center; border-top: 2px solid var(--border); }
+.sheet tfoot td.task-col { text-align: right; z-index: 2; }
+.sheet td[title] { cursor: help; }
+.load { display: inline-block; padding-bottom: 1px; border-bottom: 3px solid transparent; }
+.load.low { border-bottom-color: #e8a33d; }
+.load.ok { border-bottom-color: var(--ok); }
+.load.over { border-bottom-color: var(--danger); }
+.sheet-legend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--border); position: sticky; left: 0; }
+.sheet .total-col { position: sticky; right: 0; z-index: 1; box-shadow: -1px 0 0 var(--border); }
+.sheet thead .total-col { z-index: 3; }
+.sheet tfoot td.total-col { z-index: 3; }
