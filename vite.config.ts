@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -8,10 +9,7 @@ import tailwindcss from '@tailwindcss/vite';
  * /api/jira/<site>/<path> -> https://<site>.atlassian.net/<path>
  */
 function jiraRewrite(): Plugin {
-  const handler = async (
-    req: { url?: string; headers: Record<string, string | string[] | undefined> },
-    res: { statusCode: number; setHeader(k: string, v: string): void; end(b?: Buffer): void },
-  ) => {
+  const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const m = /^\/([a-z0-9-]+)(\/rest\/.*)$/i.exec(req.url ?? '');
     if (!m) {
       res.statusCode = 404;
@@ -19,8 +17,21 @@ function jiraRewrite(): Plugin {
       return;
     }
     try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const header = (name: string) => {
+        const v = req.headers[name];
+        return Array.isArray(v) ? v[0] : v;
+      };
+      const forward: Record<string, string> = { accept: 'application/json' };
+      for (const name of ['authorization', 'content-type', 'x-atlassian-token']) {
+        const v = header(name);
+        if (v) forward[name] = v;
+      }
       const r = await fetch(`https://${m[1]}.atlassian.net${m[2]}`, {
-        headers: { authorization: String(req.headers.authorization ?? ''), accept: 'application/json' },
+        method: req.method,
+        headers: forward,
+        body: chunks.length && req.method !== 'GET' && req.method !== 'HEAD' ? Buffer.concat(chunks) : undefined,
       });
       res.statusCode = r.status;
       res.setHeader('content-type', r.headers.get('content-type') ?? 'application/json');

@@ -1,5 +1,5 @@
-import { lazy, Suspense, useMemo } from 'react';
-import { RefreshCwIcon } from 'lucide-react';
+import { lazy, Suspense, useMemo, useState } from 'react';
+import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshCwIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -9,7 +9,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { ErrorAlert } from '@/components/error-alert';
 import { PageHeader } from '@/components/page-header';
 import { api } from '@/api';
-import { PRESETS, formatDuration, presetRange, type Preset } from '@/dates';
+import { PRESETS, formatDuration, fromISO, monthGrid, presetRange, toISO, type Preset } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useSearchState } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
@@ -17,20 +17,29 @@ import { useAsync } from '@/useAsync';
 import { summarize } from './aggregate';
 import { ByDay } from './by-day';
 import { ByTask } from './by-task';
+import { CalendarView } from './calendar-view';
 import { DateRangePicker } from './date-range-picker';
+import { LogWorkDialog } from './log-work-dialog';
 import { Timesheet } from './timesheet';
 
 // Recharts is the heaviest dependency: only load it when the Visualization tab is opened.
 const Visualization = lazy(() => import('./visualization').then((m) => ({ default: m.Visualization })));
 
-type View = 'timesheet' | 'day' | 'task' | 'charts';
+type View = 'timesheet' | 'calendar' | 'day' | 'task' | 'charts';
 const VIEWS: { id: View; label: string }[] = [
   { id: 'timesheet', label: 'Timesheet' },
+  { id: 'calendar', label: 'Calendar' },
   { id: 'day', label: 'By day' },
   { id: 'task', label: 'By task' },
   { id: 'charts', label: 'Visualization' },
 ];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
+const shiftMonth = (month: string, by: number) => {
+  const [y, m] = month.split('-').map(Number);
+  return toISO(new Date(y, m - 1 + by, 1)).slice(0, 7);
+};
 
 export function WorklogsPage() {
   const { creds } = useSession();
@@ -41,8 +50,17 @@ export function WorklogsPage() {
   const customTo = get('to');
   const isCustom = DATE_RE.test(customFrom) && DATE_RE.test(customTo) && customFrom <= customTo;
   const preset = (PRESETS.some((p) => p.id === get('range')) ? get('range') : 'this-week') as Preset;
-  const range = isCustom ? { from: customFrom, to: customTo } : presetRange(preset);
   const view = (VIEWS.some((v) => v.id === get('view')) ? get('view') : 'timesheet') as View;
+  // The calendar has its own month (?month=YYYY-MM) and loads the full weeks around it.
+  const thisMonth = toISO(new Date()).slice(0, 7);
+  const month = MONTH_RE.test(get('month')) ? get('month') : thisMonth;
+  const range =
+    view === 'calendar'
+      ? monthGrid(month)
+      : isCustom
+        ? { from: customFrom, to: customTo }
+        : presetRange(preset);
+  const [logDate, setLogDate] = useState<string | null>(null);
 
   const { data, loading, error, reload } = useAsync(
     (s) => api.worklogs(creds, range.from, range.to, s),
@@ -52,25 +70,53 @@ export function WorklogsPage() {
 
   return (
     <>
-      <PageHeader title="Work logs" description="Time you logged across every project and team." />
+      <PageHeader
+        title="Work logs"
+        description="Time you logged across every project and team."
+        actions={
+          <Button onClick={() => setLogDate(toISO(new Date()))}>
+            <PlusIcon data-icon="inline-start" /> Log work
+          </Button>
+        }
+      />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={isCustom ? '' : preset}
-          onValueChange={(v) => v && set({ range: v === 'this-week' ? null : v, from: null, to: null })}
-        >
-          {PRESETS.map((p) => (
-            <ToggleGroupItem key={p.id} value={p.id}>{p.label}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <DateRangePicker from={range.from} to={range.to} onChange={(from, to) => set({ from, to, range: null })} />
-        <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
-          <RefreshCwIcon className={cn(loading && 'animate-spin')} data-icon="inline-start" /> Refresh
-        </Button>
-      </div>
+      {view === 'calendar' ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="icon-sm" aria-label="Previous month" onClick={() => set({ month: shiftMonth(month, -1) })}>
+            <ChevronLeftIcon />
+          </Button>
+          <Button variant="outline" size="icon-sm" aria-label="Next month" onClick={() => set({ month: shiftMonth(month, 1) })}>
+            <ChevronRightIcon />
+          </Button>
+          <h2 className="min-w-36 text-base font-semibold">
+            {fromISO(`${month}-01`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+          </h2>
+          <Button variant="outline" size="sm" disabled={month === thisMonth} onClick={() => set({ month: null })}>
+            Today
+          </Button>
+          <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
+            <RefreshCwIcon className={cn(loading && 'animate-spin')} data-icon="inline-start" /> Refresh
+          </Button>
+        </div>
+      ) : (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={isCustom ? '' : preset}
+            onValueChange={(v) => v && set({ range: v === 'this-week' ? null : v, from: null, to: null })}
+          >
+            {PRESETS.map((p) => (
+              <ToggleGroupItem key={p.id} value={p.id}>{p.label}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <DateRangePicker from={range.from} to={range.to} onChange={(from, to) => set({ from, to, range: null })} />
+          <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
+            <RefreshCwIcon className={cn(loading && 'animate-spin')} data-icon="inline-start" /> Refresh
+          </Button>
+        </div>
+      )}
 
       {error && <ErrorAlert error={error} onRetry={reload} />}
 
@@ -101,6 +147,9 @@ export function WorklogsPage() {
             <TabsContent value="timesheet">
               <Timesheet entries={data} from={range.from} to={range.to} site={creds.site} />
             </TabsContent>
+            <TabsContent value="calendar">
+              <CalendarView entries={data} month={month} onDayClick={setLogDate} />
+            </TabsContent>
             <TabsContent value="day">
               <ByDay entries={data} site={creds.site} />
             </TabsContent>
@@ -115,6 +164,13 @@ export function WorklogsPage() {
           </div>
         )}
       </Tabs>
+
+      <LogWorkDialog
+        open={logDate !== null}
+        onOpenChange={(o) => !o && setLogDate(null)}
+        date={logDate ?? toISO(new Date())}
+        onLogged={reload}
+      />
     </>
   );
 }

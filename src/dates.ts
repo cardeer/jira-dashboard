@@ -119,3 +119,26 @@ export function timeRange(started: string, seconds: number): { from: string; to:
   const fmt = (mins: number) => `${pad(Math.floor(mins / 60) % 24)}:${pad(mins % 60)}`;
   return { from: fmt(startMin), to: fmt(endMin), nextDay: endMin >= 24 * 60 };
 }
+
+/** The Monday-to-Sunday weeks covering a month (YYYY-MM), for a calendar grid. */
+export function monthGrid(month: string): { from: string; to: string; days: string[] } {
+  const [y, m] = month.split('-').map(Number);
+  const first = new Date(y, m - 1, 1);
+  const last = new Date(y, m, 0);
+  const start = new Date(first);
+  start.setDate(first.getDate() - ((first.getDay() + 6) % 7));
+  const end = new Date(last);
+  end.setDate(last.getDate() + ((7 - last.getDay()) % 7));
+  const from = toISO(start);
+  const to = toISO(end);
+  return { from, to, days: eachDay(from, to) };
+}
+
+/** Minutes between two HH:MM times (negative if end is before start). */
+export const minutesBetween = (start: string, end: string) => {
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + m;
+  };
+  return toMin(end) - toMin(start);
+};

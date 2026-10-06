@@ -50,19 +50,28 @@ function basicAuth(email: string, token: string) {
 const jiraBase = (c: Credentials) => `/api/jira/${new URL(c.site).hostname.split('.')[0]}/rest/api/3`;
 
 /** Talks to Jira Cloud through the same-origin rewrite, using axios. */
-async function jiraGet<T>(
+async function jiraRequest<T>(
   c: Credentials,
+  method: 'GET' | 'POST',
   path: string,
-  params: Record<string, string | number> = {},
+  opts: { params?: Record<string, string | number>; data?: unknown } = {},
   signal?: AbortSignal,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
-      res = await axios.get(`${jiraBase(c)}${path}`, {
-        params,
+      res = await axios.request({
+        method,
+        url: `${jiraBase(c)}${path}`,
+        params: opts.params,
+        data: opts.data,
         signal,
-        headers: { Authorization: basicAuth(c.email, c.token), Accept: 'application/json' },
+        headers: {
+          Authorization: basicAuth(c.email, c.token),
+          Accept: 'application/json',
+          // Writes from a browser-originated request are otherwise rejected with "XSRF check failed".
+          ...(method !== 'GET' ? { 'Content-Type': 'application/json', 'X-Atlassian-Token': 'no-check' } : {}),
+        },
         validateStatus: () => true,
         timeout: 30_000,
       });
@@ -70,23 +79,31 @@ async function jiraGet<T>(
       if (axios.isCancel(e)) throw new DOMException('Aborted', 'AbortError');
       throw new ApiError(0, 'Could not reach Jira (network error, or the /api/jira rewrite is not set up on this host).');
     }
-    if (res.status === 429 && attempt < 3) {
+    // Only GETs are safe to retry automatically.
+    if (res.status === 429 && method === 'GET' && attempt < 3) {
       await sleep((Number(res.headers['retry-after']) || 2 ** attempt) * 1000);
       continue;
     }
     if (res.status === 401) throw new ApiError(401, 'Jira rejected the email / API token');
-    if (res.status === 403) throw new ApiError(403, 'Jira denied access to this resource');
     if (res.status >= 400) {
-      const body = res.data as { errorMessages?: string[] } | string | undefined;
-      const detail =
-        typeof body === 'object' && body?.errorMessages?.length
-          ? body.errorMessages.join('; ')
+      const body = res.data as { errorMessages?: string[]; errors?: Record<string, string> } | string | undefined;
+      const messages =
+        typeof body === 'object' && body
+          ? [...(body.errorMessages ?? []), ...Object.values(body.errors ?? {})]
+          : [];
+      const detail = messages.length
+        ? messages.join('; ')
+        : res.status === 403
+          ? 'Jira denied access to this resource'
           : String(typeof body === 'string' ? body : JSON.stringify(body ?? '')).slice(0, 300);
-      throw new ApiError(res.status, `Jira error ${res.status}: ${detail}`);
+      throw new ApiError(res.status, res.status === 403 ? detail : `Jira error ${res.status}: ${detail}`);
     }
     return res.data as T;
   }
 }
+
+const jiraGet = <T,>(c: Credentials, path: string, params: Record<string, string | number> = {}, signal?: AbortSignal) =>
+  jiraRequest<T>(c, 'GET', path, { params }, signal);
 
 async function searchIssues<F>(c: Credentials, jql: string, fields: string[], signal?: AbortSignal, cap = 1000) {
   interface Page {
@@ -381,4 +398,123 @@ async function releaseIssues(c: Credentials, versionId: string, signal?: AbortSi
   });
 }
 
-export const api = { me, tasks, worklogs, projects, releasePage, release, releaseIssues };
+export interface IssueOption {
+  key: string;
+  summary: string;
+  issueType: string;
+  status: string;
+  statusCategory: StatusCategory;
+  projectKey: string;
+  projectName: string;
+}
+
+const KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+
+/**
+ * Issues to log work against. Empty query: your recent issues. Otherwise matches the issue key,
+ * summary (prefix) and Jira's full-text field (summary, description, comments).
+ */
+async function searchIssueOptions(c: Credentials, query: string, signal?: AbortSignal): Promise<IssueOption[]> {
+  const q = query.trim().replace(/["\\]/g, ' ').trim();
+  interface F {
+    summary: string;
+    status: { name: string; statusCategory?: { key: string } };
+    issuetype: { name: string };
+    project: { key: string; name: string };
+  }
+  const run = async (jql: string) =>
+    (
+      await jiraGet<{ issues: { key: string; fields: F }[] }>(
+        c,
+        '/search/jql',
+        { jql, fields: 'summary,status,issuetype,project', maxResults: 20 },
+        signal,
+      )
+    ).issues;
+
+  let issues;
+  if (!q) {
+    issues = await run('(assignee = currentUser() OR worklogAuthor = currentUser()) AND updated >= -60d ORDER BY updated DESC');
+  } else {
+    const text = [`text ~ "${q}"`];
+    if (!/\s/.test(q) && q.length >= 2) text.push(`summary ~ "${q}*"`);
+    const textJql = `(${text.join(' OR ')}) ORDER BY updated DESC`;
+    if (KEY_RE.test(q)) {
+      try {
+        // `key = X` errors (400) when the project/issue doesn't exist, so fall back to text only.
+        issues = await run(`(key = "${q.toUpperCase()}" OR ${text.join(' OR ')}) ORDER BY updated DESC`);
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 400) throw e;
+        issues = await run(textJql);
+      }
+    } else {
+      issues = await run(textJql);
+    }
+  }
+  return issues.map((i) => {
+    const cat = i.fields.status.statusCategory?.key;
+    return {
+      key: i.key,
+      summary: i.fields.summary,
+      issueType: i.fields.issuetype.name,
+      status: i.fields.status.name,
+      statusCategory: cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown',
+      projectKey: i.fields.project.key,
+      projectName: i.fields.project.name,
+    };
+  });
+}
+
+export interface NewWorklog {
+  issueKey: string;
+  /** YYYY-MM-DD */
+  date: string;
+  /** HH:MM, local time */
+  start: string;
+  seconds: number;
+  comment: string;
+}
+
+/** Jira wants `started` as 2026-10-05T09:00:00.000+0700 (with this browser's UTC offset that day). */
+function jiraStarted(date: string, time: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  const offsetMin = -new Date(y, m - 1, d, hh, mm).getTimezoneOffset();
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date}T${pad(hh)}:${pad(mm)}:00.000${sign}${pad(Math.floor(abs / 60))}${pad(abs % 60)}`;
+}
+
+/** Plain text → Atlassian Document Format (one paragraph per line). */
+function textToAdf(text: string) {
+  return {
+    type: 'doc',
+    version: 1,
+    content: text
+      .split('\n')
+      .map((line) => ({ type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [] })),
+  };
+}
+
+async function addWorklog(c: Credentials, w: NewWorklog): Promise<void> {
+  await jiraRequest(c, 'POST', `/issue/${encodeURIComponent(w.issueKey)}/worklog`, {
+    data: {
+      started: jiraStarted(w.date, w.start),
+      timeSpentSeconds: w.seconds,
+      ...(w.comment.trim() ? { comment: textToAdf(w.comment.trim()) } : {}),
+    },
+  });
+}
+
+export const api = {
+  me,
+  tasks,
+  worklogs,
+  projects,
+  releasePage,
+  release,
+  releaseIssues,
+  searchIssueOptions,
+  addWorklog,
+};
