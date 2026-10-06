@@ -1,5 +1,6 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
 import type { WorklogEntry } from '../../shared/types';
+import { useHoverTip } from './HoverTip';
 import { eachDay, formatDay, fromISO, isWeekend, timeRange, toISO } from '../dates';
 
 interface Props {
@@ -51,6 +52,7 @@ interface ProjectGroup {
 export default function Timesheet({ entries, from, to, site }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const today = toISO(new Date());
+  const { bind, tip } = useHoverTip();
 
   const days = useMemo(() => eachDay(from, to), [from, to]);
 
@@ -116,13 +118,17 @@ export default function Timesheet({ entries, from, to, site }: Props) {
     ['day-col', isWeekend(d) ? 'weekend' : '', d === today ? 'today' : ''].filter(Boolean).join(' ');
 
   /** Renders one row's day cells (+ week subtotals) from a seconds-per-day lookup. */
-  const cells = (perDay: (d: string) => number, opts: { underline?: boolean; title?: (d: string) => string } = {}) =>
+  const cells = (perDay: (d: string) => number, opts: { underline?: boolean; tip?: (d: string) => ReactNode } = {}) =>
     weeks.map((w) => (
       <Fragment key={w.days[0]}>
         {w.days.map((d) => {
           const s = perDay(d);
           return (
-            <td key={d} className={dayClass(d)} title={s && opts.title ? opts.title(d) : undefined}>
+            <td
+              key={d}
+              className={`${dayClass(d)} ${s && opts.tip ? 'has-tip' : ''}`}
+              {...(s && opts.tip ? { tabIndex: 0, ...bind(() => opts.tip!(d)) } : {})}
+            >
               {s > 0 && <span className={opts.underline ? `load ${load(s)}` : undefined}>{hours(s)}</span>}
             </td>
           );
@@ -178,20 +184,19 @@ export default function Timesheet({ entries, from, to, site }: Props) {
                 {isOpen &&
                   g.tasks.map((t) => (
                     <tr key={t.key}>
-                      <td className="task-col" title={`${t.key} ${t.summary}`}>
+                      <td
+                        className="task-col"
+                        {...bind(() => (
+                          <div className="tip-title"><b>{t.key}</b> {t.summary}</div>
+                        ))}
+                      >
                         <a className="key" href={`${site}/browse/${t.key}`} target="_blank" rel="noreferrer">{t.key}</a>
                         <span className="task-summary">{t.summary}</span>
                       </td>
                       {cells(
                         (d) => (t.perDay.get(d) ?? []).reduce((s, e) => s + e.timeSpentSeconds, 0),
                         {
-                          title: (d) =>
-                            (t.perDay.get(d) ?? [])
-                              .map((e) => {
-                                const r = timeRange(e.started, e.timeSpentSeconds);
-                                return `${r.from}–${r.to}${r.nextDay ? ' (+1)' : ''}  ${hours(e.timeSpentSeconds)}h${e.comment ? `  · ${e.comment}` : ''}`;
-                              })
-                              .join('\n'),
+                          tip: (d) => <EntryTip task={t} day={d} />,
                         },
                       )}
                       <td className="total-col">{hours(t.total)}</td>
@@ -209,10 +214,39 @@ export default function Timesheet({ entries, from, to, site }: Props) {
           </tr>
         </tfoot>
       </table>
+      {tip}
       <div className="sheet-legend small muted">
         Daily totals: <span className="load low">under {LOW_H}h</span> <span className="load ok">{LOW_H}–{DAY_TARGET_H}h</span>{' '}
         <span className="load over">over {DAY_TARGET_H}h</span> · hover a cell for times and comments
       </div>
     </div>
+  );
+}
+
+function EntryTip({ task, day }: { task: TaskRow; day: string }) {
+  const list = [...(task.perDay.get(day) ?? [])].sort((a, b) => (a.started < b.started ? -1 : 1));
+  const total = list.reduce((s, e) => s + e.timeSpentSeconds, 0);
+  return (
+    <>
+      <div className="tip-head">
+        <span><b>{task.key}</b> · {formatDay(day)}</span>
+        <strong>{hours(total)}h</strong>
+      </div>
+      {list.map((e) => {
+        const r = timeRange(e.started, e.timeSpentSeconds);
+        return (
+          <div key={e.id} className="tip-entry">
+            <div className="tip-row">
+              <span className="tip-time">
+                {r.from} – {r.to}
+                {r.nextDay && <sup>+1</sup>}
+              </span>
+              <span>{hours(e.timeSpentSeconds)}h</span>
+            </div>
+            {e.comment && <div className="tip-comment">{e.comment}</div>}
+          </div>
+        );
+      })}
+    </>
   );
 }

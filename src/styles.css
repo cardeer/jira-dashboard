@@ -279,7 +279,6 @@ td.caret { width: 28px; padding-right: 0; }
 .sheet .group-row td.task-col { background: var(--bg); }
 .sheet tfoot td { position: sticky; bottom: 0; background: var(--surface); font-weight: 700; text-align: center; border-top: 2px solid var(--border); }
 .sheet tfoot td.task-col { text-align: right; z-index: 2; }
-.sheet td[title] { cursor: help; }
 .load { display: inline-block; padding-bottom: 1px; border-bottom: 3px solid transparent; }
 .load.low { border-bottom-color: #e8a33d; }
 .load.ok { border-bottom-color: var(--ok); }
@@ -288,3 +287,19 @@ td.caret { width: 28px; padding-right: 0; }
 .sheet .total-col { position: sticky; right: 0; z-index: 1; box-shadow: -1px 0 0 var(--border); }
 .sheet thead .total-col { z-index: 3; }
 .sheet tfoot td.total-col { z-index: 3; }
+
+/* instant hover tooltip */
+.hover-tip {
+  position: fixed; z-index: 50; pointer-events: none;
+  width: max-content; max-width: 300px; padding: 8px 10px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.22); font-size: 12px; line-height: 1.45;
+}
+.hover-tip .tip-head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
+.hover-tip .tip-entry + .tip-entry { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.hover-tip .tip-row { display: flex; justify-content: space-between; gap: 16px; }
+.hover-tip .tip-time { font-weight: 600; font-variant-numeric: tabular-nums; }
+.hover-tip .tip-comment { color: var(--muted); white-space: pre-line; }
+.hover-tip .tip-title { white-space: normal; }
+.sheet td.has-tip { cursor: default; }
+.sheet td.has-tip:hover, .sheet td.has-tip:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); outline: none; }
