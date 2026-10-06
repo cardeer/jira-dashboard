@@ -97,13 +97,13 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
-        <form onSubmit={submit} className="grid gap-5">
+        <form onSubmit={submit} className="grid min-w-0 grid-cols-1 gap-5">
           <DialogHeader>
             <DialogTitle>Log work</DialogTitle>
             <DialogDescription>Adds a work log to the selected Jira issue.</DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-1.5">
+          <div className="grid min-w-0 grid-cols-1 gap-1.5">
             <Label>Task</Label>
             <IssuePicker value={issue} onChange={setIssue} />
           </div>
@@ -210,9 +210,9 @@ function IssuePicker({ value, onChange }: { value: IssueOption | null; onChange:
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" role="combobox" aria-expanded={open} className="h-auto min-h-9 w-full justify-between py-1.5 font-normal">
+        <Button variant="outline" role="combobox" aria-expanded={open} className="h-auto min-h-9 w-full min-w-0 shrink justify-between overflow-hidden py-1.5 font-normal">
           {value ? (
-            <span className="min-w-0 truncate text-left">
+            <span className="min-w-0 flex-1 truncate text-left" title={`${value.key} ${value.summary}`}>
               <span className="font-medium text-link">{value.key}</span> {value.summary}
             </span>
           ) : (
