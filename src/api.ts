@@ -408,49 +408,104 @@ export interface IssueOption {
   projectName: string;
 }
 
-const KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+interface PickerFields {
+  summary: string;
+  status: { name: string; statusCategory?: { key: string } };
+  issuetype: { name: string };
+  project: { key: string; name: string };
+}
+type PickerIssue = { key: string; fields: PickerFields };
+const PICKER_FIELDS = ['summary', 'status', 'issuetype', 'project'];
+const RECENT_JQL = '(assignee = currentUser() OR worklogAuthor = currentUser()) AND updated >= -60d ORDER BY updated DESC';
+
+/** "1234" → number only; "NCS-1234" / "ncs1234" → project + number. */
+const KEY_QUERY_RE = /^(?:([A-Za-z][A-Za-z0-9_]*?)-?)?(\d+)$/;
+/** Jira's bulk fetch accepts at most 100 keys. */
+const BULK_LIMIT = 100;
 
 /**
- * Issues to log work against. Empty query: your recent issues. Otherwise matches the issue key,
- * summary (prefix) and Jira's full-text field (summary, description, comments).
+ * Project keys to try for a bare issue number, your recently used projects first.
+ * Cached per account for the session (not tied to one request's AbortSignal).
+ */
+const projectKeyCache = new Map<string, Promise<string[]>>();
+function projectKeysFor(c: Credentials): Promise<string[]> {
+  const id = `${c.site}|${c.email}`;
+  let p = projectKeyCache.get(id);
+  if (!p) {
+    p = (async () => {
+      const [recent, all] = await Promise.all([
+        jiraGet<{ issues: PickerIssue[] }>(c, '/search/jql', { jql: RECENT_JQL, fields: 'project', maxResults: 100 }),
+        projects(c),
+      ]);
+      return [...new Set([...recent.issues.map((i) => i.fields.project.key), ...all.map((x) => x.key)])];
+    })();
+    p.catch(() => projectKeyCache.delete(id));
+    projectKeyCache.set(id, p);
+  }
+  return p;
+}
+
+/** Fetch issues by key; keys that don't exist are simply skipped (unlike `key in (...)` in JQL). */
+async function fetchByKeys(c: Credentials, keys: string[], signal?: AbortSignal): Promise<PickerIssue[]> {
+  if (keys.length === 0) return [];
+  const res = await jiraRequest<{ issues?: PickerIssue[] }>(
+    c,
+    'POST',
+    '/issue/bulkfetch',
+    { data: { issueIdsOrKeys: keys.slice(0, BULK_LIMIT), fields: PICKER_FIELDS } },
+    signal,
+  );
+  return res.issues ?? [];
+}
+
+/**
+ * Issues to log work against. Empty query: your recent issues. Otherwise:
+ * - a number ("1234") matches that issue number in any of your projects (NCS-1234, UD-1234, …),
+ * - a key with or without the dash ("NCS-1234", "ncs1234") matches that issue,
+ * - plus Jira full-text search over summary, description and comments.
  */
 async function searchIssueOptions(c: Credentials, query: string, signal?: AbortSignal): Promise<IssueOption[]> {
   const q = query.trim().replace(/["\\]/g, ' ').trim();
-  interface F {
-    summary: string;
-    status: { name: string; statusCategory?: { key: string } };
-    issuetype: { name: string };
-    project: { key: string; name: string };
-  }
   const run = async (jql: string) =>
     (
-      await jiraGet<{ issues: { key: string; fields: F }[] }>(
+      await jiraGet<{ issues: PickerIssue[] }>(
         c,
         '/search/jql',
-        { jql, fields: 'summary,status,issuetype,project', maxResults: 20 },
+        { jql, fields: PICKER_FIELDS.join(','), maxResults: 20 },
         signal,
       )
     ).issues;
 
-  let issues;
+  let issues: PickerIssue[];
   if (!q) {
-    issues = await run('(assignee = currentUser() OR worklogAuthor = currentUser()) AND updated >= -60d ORDER BY updated DESC');
+    issues = await run(RECENT_JQL);
   } else {
     const text = [`text ~ "${q}"`];
     if (!/\s/.test(q) && q.length >= 2) text.push(`summary ~ "${q}*"`);
-    const textJql = `(${text.join(' OR ')}) ORDER BY updated DESC`;
-    if (KEY_RE.test(q)) {
-      try {
-        // `key = X` errors (400) when the project/issue doesn't exist, so fall back to text only.
-        issues = await run(`(key = "${q.toUpperCase()}" OR ${text.join(' OR ')}) ORDER BY updated DESC`);
-      } catch (e) {
-        if (!(e instanceof ApiError) || e.status !== 400) throw e;
-        issues = await run(textJql);
-      }
-    } else {
-      issues = await run(textJql);
-    }
+
+    const keyMatch = KEY_QUERY_RE.exec(q);
+    const byKey = keyMatch
+      ? (async () => {
+          const [, prefix, num] = keyMatch;
+          const keys = prefix
+            ? [`${prefix.toUpperCase()}-${Number(num)}`]
+            : (await projectKeysFor(c)).map((k) => `${k}-${Number(num)}`);
+          try {
+            return await fetchByKeys(c, keys, signal);
+          } catch (e) {
+            // Key lookup is a bonus: never let it hide the text results (except a bad token).
+            if (e instanceof ApiError && e.status === 401) throw e;
+            if ((e as Error).name === 'AbortError') throw e;
+            return [];
+          }
+        })()
+      : Promise.resolve([]);
+
+    const [keyIssues, textIssues] = await Promise.all([byKey, run(`(${text.join(' OR ')}) ORDER BY updated DESC`)]);
+    const seen = new Set<string>();
+    issues = [...keyIssues, ...textIssues].filter((i) => !seen.has(i.key) && seen.add(i.key));
   }
+
   return issues.map((i) => {
     const cat = i.fields.status.statusCategory?.key;
     return {
