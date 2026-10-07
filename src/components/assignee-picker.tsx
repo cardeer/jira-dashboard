@@ -23,7 +23,18 @@ function useDebounced<T>(value: T, ms: number) {
 }
 
 /** Assignee combobox: me, unassigned, or a search of people assignable in `projectKey`. */
-export function AssigneePicker({ projectKey, value, onChange }: { projectKey: string; value: Assignee; onChange: (a: Assignee) => void }) {
+export function AssigneePicker({
+  projectKey,
+  value,
+  onChange,
+  noneLabel = 'Unassigned',
+}: {
+  projectKey: string;
+  value: Assignee;
+  onChange: (a: Assignee) => void;
+  /** Wording for "nobody" (e.g. "No tester", "Add tester…"). */
+  noneLabel?: string;
+}) {
   const { creds, me } = useSession();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -46,7 +57,7 @@ export function AssigneePicker({ projectKey, value, onChange }: { projectKey: st
       </>
     ) : value.kind === 'none' ? (
       <>
-        <UserXIcon className="text-muted-foreground" /> Unassigned
+        <UserXIcon className="text-muted-foreground" /> {noneLabel}
       </>
     ) : (
       <>
@@ -57,7 +68,13 @@ export function AssigneePicker({ projectKey, value, onChange }: { projectKey: st
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" role="combobox" aria-expanded={open} aria-label="Assignee" className="w-full min-w-0 justify-between font-normal">
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label="Assignee"
+          className="w-full min-w-0 justify-between font-normal"
+        >
           <span className="flex min-w-0 items-center gap-2 truncate">{label}</span>
           <ChevronsUpDownIcon className="opacity-50" />
         </Button>
@@ -75,7 +92,7 @@ export function AssigneePicker({ projectKey, value, onChange }: { projectKey: st
                 </CommandItem>
                 <CommandItem value="__none" onSelect={() => pick({ kind: 'none' })} className="gap-2">
                   <UserXIcon className="text-muted-foreground" />
-                  <span className="flex-1">Unassigned</span>
+                  <span className="flex-1">{noneLabel}</span>
                   <CheckIcon className={cn(value.kind === 'none' ? 'opacity-100' : 'opacity-0')} />
                 </CommandItem>
               </CommandGroup>
@@ -90,11 +107,18 @@ export function AssigneePicker({ projectKey, value, onChange }: { projectKey: st
             {people.length > 0 && (
               <CommandGroup heading="People">
                 {people.map((p) => (
-                  <CommandItem key={p.accountId} value={p.accountId} onSelect={() => pick({ kind: 'user', person: p })} className="gap-2">
+                  <CommandItem
+                    key={p.accountId}
+                    value={p.accountId}
+                    onSelect={() => pick({ kind: 'user', person: p })}
+                    className="gap-2"
+                  >
                     <PersonAvatar person={p} />
                     <span className="min-w-0 flex-1 truncate">{p.displayName}</span>
                     <CheckIcon
-                      className={cn(value.kind === 'user' && value.person.accountId === p.accountId ? 'opacity-100' : 'opacity-0')}
+                      className={cn(
+                        value.kind === 'user' && value.person.accountId === p.accountId ? 'opacity-100' : 'opacity-0',
+                      )}
                     />
                   </CommandItem>
                 ))}

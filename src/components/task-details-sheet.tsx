@@ -29,6 +29,7 @@ import { PersonAvatar } from '@/components/person-avatar';
 import { RichTextEditor } from '@/components/rich-text-editor';
 import { StatusMenu } from '@/components/status-menu';
 import { api, ApiError, type EditMeta, type IssueDetail, type Transition } from '@/api';
+import type { Person } from '../../shared/types';
 import { formatDate, formatDuration, fromISO, relativeTime, toISO } from '@/dates';
 import { adfHasOpaqueContent, adfToTiptap, tiptapToAdf } from '@/lib/adf';
 import { useSession } from '@/lib/session';
@@ -97,6 +98,7 @@ interface Draft {
   original?: number; // minutes
   remaining?: number; // minutes
   storyPoints?: number | null;
+  testers?: Person[];
   dueDate?: string | null;
   labels?: string[];
   description?: JSONContent;
@@ -109,11 +111,14 @@ const LABELS: Record<keyof Draft, string> = {
   original: 'original estimate',
   remaining: 'remaining estimate',
   storyPoints: 'story points',
+  testers: 'tester',
   dueDate: 'due date',
   labels: 'labels',
   description: 'description',
   transition: 'status',
 };
+
+const samePeople = (a: Person[], b: Person[]) => a.map((p) => p.accountId).join() === b.map((p) => p.accountId).join();
 
 const sameAssignee = (a: Assignee, b: Assignee, myId: string) => {
   const id = (x: Assignee) => (x.kind === 'none' ? null : x.kind === 'me' ? myId : x.person.accountId);
@@ -188,6 +193,7 @@ function Details({
     estimate: draft.original ?? original.estimate,
     remaining: draft.remaining ?? original.remaining,
     storyPoints: 'storyPoints' in draft ? (draft.storyPoints ?? null) : d.storyPoints,
+    testers: draft.testers ?? d.testers,
     dueDate: 'dueDate' in draft ? (draft.dueDate ?? null) : d.dueDate,
     labels: draft.labels ?? d.labels,
   };
@@ -213,6 +219,14 @@ function Details({
       };
     }
     if ('storyPoints' in draft && d.fieldIds.storyPoints) fields[d.fieldIds.storyPoints] = draft.storyPoints;
+    if (draft.testers && d.fieldIds.tester) {
+      const ref = (p: Person) => ({ accountId: p.accountId });
+      fields[d.fieldIds.tester.id] = d.fieldIds.tester.multi
+        ? draft.testers.map(ref)
+        : draft.testers[0]
+          ? ref(draft.testers[0])
+          : null;
+    }
     if ('dueDate' in draft) fields.duedate = draft.dueDate;
     if (draft.labels) fields.labels = draft.labels;
     if (draft.description) fields.description = tiptapToAdf(draft.description);
@@ -316,6 +330,17 @@ function Details({
               <PersonLine person={d.assignee} empty="Unassigned" />
             )}
           </Field>
+          {d.fieldIds.tester && (
+            <Field label="Tester" changed={'testers' in draft}>
+              <TesterField
+                projectKey={d.project.key}
+                value={v.testers}
+                multi={d.fieldIds.tester.multi}
+                editable={can(d.fieldIds.tester.id)}
+                onChange={(list) => stage('testers', list, samePeople(list, d.testers))}
+              />
+            </Field>
+          )}
           <Field label="Reporter">
             <PersonLine person={d.reporter} empty="—" />
           </Field>
@@ -452,6 +477,82 @@ function Field({ label, children, changed }: { label: string; children: ReactNod
       </div>
       <div className="flex min-h-8 min-w-0 items-center text-sm">{children}</div>
     </>
+  );
+}
+
+/** The site's "Tester" field: one person (picker) or several (chips + add). */
+function TesterField({
+  projectKey,
+  value,
+  multi,
+  editable,
+  onChange,
+}: {
+  projectKey: string;
+  value: Person[];
+  multi: boolean;
+  editable: boolean;
+  onChange: (people: Person[]) => void;
+}) {
+  const { me } = useSession();
+  const toPerson = (a: Assignee): Person | null => (a.kind === 'none' ? null : a.kind === 'me' ? me : a.person);
+  if (!editable) {
+    return value.length ? (
+      <div className="flex flex-wrap gap-3">
+        {value.map((p) => (
+          <PersonLine key={p.accountId} person={p} empty="—" />
+        ))}
+      </div>
+    ) : (
+      <span className="text-muted-foreground">—</span>
+    );
+  }
+  if (!multi) {
+    const current: Assignee = value[0]
+      ? value[0].accountId === me.accountId
+        ? { kind: 'me' }
+        : { kind: 'user', person: value[0] }
+      : { kind: 'none' };
+    return (
+      <AssigneePicker
+        projectKey={projectKey}
+        value={current}
+        noneLabel="No tester"
+        onChange={(a) => {
+          const p = toPerson(a);
+          onChange(p ? [p] : []);
+        }}
+      />
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {value.map((p) => (
+        <Badge key={p.accountId} variant="secondary" className="h-7 gap-1.5 pr-1 pl-0.5">
+          <PersonAvatar person={p} className="size-5" />
+          {p.displayName}
+          <button
+            type="button"
+            onClick={() => onChange(value.filter((x) => x.accountId !== p.accountId))}
+            aria-label={`Remove ${p.displayName}`}
+            className="rounded-full hover:bg-foreground/10"
+          >
+            <XIcon className="size-3" />
+          </button>
+        </Badge>
+      ))}
+      <div className="w-40">
+        <AssigneePicker
+          projectKey={projectKey}
+          value={{ kind: 'none' }}
+          noneLabel="Add tester…"
+          onChange={(a) => {
+            const p = toPerson(a);
+            if (p && !value.some((x) => x.accountId === p.accountId)) onChange([...value, p]);
+          }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -773,9 +874,14 @@ function DescriptionSection({
           <RichTextEditor content={initial} onChange={onChange} autoFocus />
           {hasPlaceholders && (
             <p className="text-xs text-muted-foreground">
-              Images, tables, mentions and other Jira-only content appear as grey placeholders and are saved unchanged. To
-              edit those parts,{' '}
-              <a href={jiraUrl} target="_blank" rel="noreferrer" className="text-link underline-offset-2 hover:underline">
+              Images, tables, mentions and other Jira-only content appear as grey placeholders and are saved unchanged.
+              To edit those parts,{' '}
+              <a
+                href={jiraUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-link underline-offset-2 hover:underline"
+              >
                 open the issue in Jira
               </a>
               .

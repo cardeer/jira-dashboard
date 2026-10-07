@@ -29,6 +29,11 @@ export interface Task {
   updated: string;
   dueDate: string | null;
   assignee: { accountId: string; displayName: string; avatarUrl?: string } | null;
+  /** Original estimate / remaining estimate in seconds (null when not set). */
+  estimateSeconds: number | null;
+  remainingSeconds: number | null;
+  /** People in the site's "Tester" field (empty when the field doesn't exist or is unset). */
+  testers: { accountId: string; displayName: string; avatarUrl?: string }[];
 }
 
 export type TaskScope = 'mine' | 'all';

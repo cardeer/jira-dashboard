@@ -11,23 +11,24 @@ import { formatDate, formatDuration } from '@/dates';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
-import type { StatusCategory } from '../../../shared/types';
+import type { StatusCategory, TaskScope } from '../../../shared/types';
 
 interface Props {
   boardId: string | null;
-  /** Extra JQL to narrow issues (scope, text search). */
-  jql: string;
+  /** Narrow issues: assigned to me / all, and free-text search (keys work without prefix). */
+  scope: TaskScope;
+  text: string;
   onOpen: (key: string) => void;
   /** Bumped by the parent to force a reload (e.g. after edits in the details panel). */
   reloadKey: number;
 }
 
 /** A board's active sprint(s), future sprints and backlog, like Jira's backlog view. */
-export function SprintView({ boardId, jql, onOpen, reloadKey }: Props) {
+export function SprintView({ boardId, scope, text, onOpen, reloadKey }: Props) {
   const { creds } = useSession();
   const { data, loading, error, reload } = useAsync(
-    (s) => (boardId ? api.sprintBoard(creds, boardId, jql, s) : Promise.resolve(null)),
-    [creds, boardId, jql, reloadKey],
+    (s) => (boardId ? api.sprintBoard(creds, boardId, { scope, text }, s) : Promise.resolve(null)),
+    [creds, boardId, scope, text, reloadKey],
   );
   const [overrides, setOverrides] = useState<Record<string, { status: string; statusCategory: StatusCategory }>>({});
 
@@ -54,7 +55,9 @@ export function SprintView({ boardId, jql, onOpen, reloadKey }: Props) {
   return (
     <div className={cn('grid gap-3', loading && 'opacity-60 transition-opacity')}>
       {data.length === 1 && data[0].state === 'backlog' && (
-        <p className="text-sm text-muted-foreground">This board has no active or upcoming sprints (Kanban boards don’t use sprints).</p>
+        <p className="text-sm text-muted-foreground">
+          This board has no active or upcoming sprints (Kanban boards don’t use sprints).
+        </p>
       )}
       {data.map((section) => (
         <Section
@@ -99,7 +102,8 @@ function Section({
         {s.state === 'future' && <Badge variant="secondary">Upcoming</Badge>}
         {(s.startDate || s.endDate) && (
           <span className="text-sm text-muted-foreground">
-            {s.startDate ? formatDate(s.startDate.slice(0, 10)) : '?'} – {s.endDate ? formatDate(s.endDate.slice(0, 10)) : '?'}
+            {s.startDate ? formatDate(s.startDate.slice(0, 10)) : '?'} –{' '}
+            {s.endDate ? formatDate(s.endDate.slice(0, 10)) : '?'}
           </span>
         )}
         <span className="ml-auto flex flex-wrap items-center gap-3 text-sm text-muted-foreground tabular-nums">
@@ -132,11 +136,36 @@ function Section({
                   {t.summary}
                 </span>
                 <span onClick={(e) => e.stopPropagation()} className="shrink-0">
-                  <StatusMenu issueKey={t.key} status={t.status} category={t.statusCategory} onChanged={(st, c) => onStatus(t.key, st, c)} />
+                  <StatusMenu
+                    issueKey={t.key}
+                    status={t.status}
+                    category={t.statusCategory}
+                    onChanged={(st, c) => onStatus(t.key, st, c)}
+                  />
                 </span>
-                <span className="w-8 shrink-0" title={t.assignee?.displayName ?? 'Unassigned'}>
-                  {t.assignee ? <PersonAvatar person={t.assignee} /> : <span className="text-xs text-muted-foreground">—</span>}
+                <span
+                  className="w-16 shrink-0 text-right text-xs text-muted-foreground tabular-nums"
+                  title="Original estimate"
+                >
+                  {t.estimateSeconds ? formatDuration(t.estimateSeconds) : '—'}
                 </span>
+                <span className="w-8 shrink-0" title={`Assignee: ${t.assignee?.displayName ?? 'Unassigned'}`}>
+                  {t.assignee ? (
+                    <PersonAvatar person={t.assignee} />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </span>
+                {t.testers.length > 0 && (
+                  <span
+                    className="flex shrink-0 -space-x-1.5"
+                    title={`Tester: ${t.testers.map((p) => p.displayName).join(', ')}`}
+                  >
+                    {t.testers.slice(0, 2).map((p) => (
+                      <PersonAvatar key={p.accountId} person={p} className="ring-2 ring-card" />
+                    ))}
+                  </span>
+                )}
               </div>
             ))
           )}

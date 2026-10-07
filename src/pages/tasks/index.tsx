@@ -24,8 +24,8 @@ import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
 import { StatusMenu } from '@/components/status-menu';
 import { TaskDetailsSheet } from '@/components/task-details-sheet';
-import { api, SHOW_ALL_CAP, taskFilterJql, type Board, type TaskQuery } from '@/api';
-import { formatDay, relativeTime } from '@/dates';
+import { api, SHOW_ALL_CAP, type Board, type TaskQuery } from '@/api';
+import { formatDay, formatDuration, relativeTime } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
@@ -60,6 +60,11 @@ export function TasksPage() {
   const openIssue = get('issue') || null;
   const [sprintReload, setSprintReload] = useState(0);
   const [query, setQuery] = useUrlSearchInput('q');
+
+  // Show a Tester column only on sites that have a Tester field.
+  const fieldIds = useAsync((s) => api.customFieldIds(creds).then((ids) => (s.aborted ? null : ids)), [creds]);
+  const hasTester = Boolean(fieldIds.data?.tester);
+  const columns = hasTester ? 9 : 8;
 
   const [pickedBoard, setPickedBoard] = useState<Board | null>(null);
   const boardReq = useAsync((s) => (boardId ? api.board(creds, boardId, s) : Promise.resolve(null)), [creds, boardId]);
@@ -230,7 +235,8 @@ export function TasksPage() {
       {view === 'sprints' ? (
         <SprintView
           boardId={boardId}
-          jql={taskFilterJql(scope, get('q'))}
+          scope={scope}
+          text={get('q')}
           onOpen={(key) => set({ issue: key })}
           reloadKey={sprintReload}
         />
@@ -243,6 +249,8 @@ export function TasksPage() {
                 <TableHead>Summary</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Assignee</TableHead>
+                {hasTester && <TableHead>Tester</TableHead>}
+                <TableHead className="text-right">Estimate</TableHead>
                 <TableHead>Priority</TableHead>
                 <TableHead>Due</TableHead>
                 <TableHead className="pr-4">Updated</TableHead>
@@ -253,7 +261,7 @@ export function TasksPage() {
                 loading &&
                 Array.from({ length: 6 }, (_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={7} className="px-4">
+                    <TableCell colSpan={columns} className="px-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -296,6 +304,38 @@ export function TasksPage() {
                         <span className="text-muted-foreground">Unassigned</span>
                       )}
                     </TableCell>
+                    {hasTester && (
+                      <TableCell>
+                        {t.testers.length ? (
+                          <span
+                            className="flex items-center gap-2"
+                            title={t.testers.map((p) => p.displayName).join(', ')}
+                          >
+                            <PersonAvatar person={t.testers[0]} />
+                            <span className="max-w-32 truncate">
+                              {t.testers[0].displayName}
+                              {t.testers.length > 1 && ` +${t.testers.length - 1}`}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                    )}
+                    <TableCell className="text-right tabular-nums">
+                      {t.estimateSeconds ? (
+                        <>
+                          <div>{formatDuration(t.estimateSeconds)}</div>
+                          {t.remainingSeconds !== null && t.remainingSeconds !== t.estimateSeconds && (
+                            <div className="text-xs text-muted-foreground">
+                              {formatDuration(t.remainingSeconds)} left
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{t.priority ?? '—'}</TableCell>
                     <TableCell className={cn(overdue ? 'font-medium text-destructive' : 'text-muted-foreground')}>
                       {t.dueDate ? formatDay(t.dueDate, { weekday: undefined }) : '—'}
@@ -306,7 +346,7 @@ export function TasksPage() {
               })}
               {data && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={columns} className="h-24 text-center text-muted-foreground">
                     No tasks match.
                   </TableCell>
                 </TableRow>

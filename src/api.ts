@@ -189,36 +189,50 @@ export interface TaskQuery {
   text: string;
 }
 
+/**
+ * JQL for free-text task search. Matches summary/description/comments and issue keys —
+ * with or without the project prefix: "1234" finds NCS-1234, UD-1234…, "ncs1234" finds NCS-1234.
+ * Keys are checked first (bulk fetch skips missing ones) so `key in (...)` never fails the search.
+ */
+async function textJql(c: Credentials, text: string, signal?: AbortSignal): Promise<string> {
+  const t = text.trim().replace(/["\\]/g, ' ').trim();
+  if (!t) return '';
+  const or = [`text ~ "${t}"`];
+  if (!/\s/.test(t) && t.length >= 2) or.push(`summary ~ "${t}*"`);
+  const m = KEY_QUERY_RE.exec(t);
+  if (m) {
+    const [, prefix, num] = m;
+    const candidates = prefix
+      ? [`${prefix.toUpperCase()}-${Number(num)}`]
+      : (await projectKeysFor(c)).map((k) => `${k}-${Number(num)}`);
+    try {
+      const found = await fetchByKeys(c, candidates, signal);
+      if (found.length) or.unshift(`key in (${found.map((i) => i.key).join(', ')})`);
+    } catch (e) {
+      // Key lookup is a bonus: keep the text search (except for a bad token / cancellation).
+      if ((e instanceof ApiError && e.status === 401) || (e as Error).name === 'AbortError') throw e;
+    }
+  }
+  return `(${or.join(' OR ')})`;
+}
+
 /** JQL for the Tasks page (board filter resolved to its saved filter). */
-async function taskJql(c: Credentials, q: TaskQuery, signal?: AbortSignal): Promise<{ jql: string; withKey: boolean }> {
+async function taskJql(c: Credentials, q: TaskQuery, signal?: AbortSignal): Promise<string> {
   const parts: string[] = [];
   if (q.boardId) parts.push(`filter = ${Number(await boardFilterId(c, q.boardId, signal))}`);
   if (q.scope === 'mine') parts.push('assignee = currentUser()');
   parts.push(STATUS_JQL[q.status]);
-  const t = q.text.trim().replace(/["\\]/g, ' ').trim();
-  let withKey = false;
-  if (t) {
-    const text = [`text ~ "${t}"`];
-    if (!/\s/.test(t) && t.length >= 2) text.push(`summary ~ "${t}*"`);
-    if (/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(t)) {
-      text.unshift(`key = "${t.toUpperCase()}"`);
-      withKey = true;
-    }
-    parts.push(`(${text.join(' OR ')})`);
-  }
-  return { jql: `${parts.join(' AND ')} ORDER BY updated DESC`, withKey };
+  const text = await textJql(c, q.text, signal);
+  if (text) parts.push(text);
+  return `${parts.join(' AND ')} ORDER BY updated DESC`;
 }
 
-/** Scope + text part of the task JQL (no board/status/order): used to narrow sprint & backlog issues. */
-export function taskFilterJql(scope: TaskScope, text: string): string {
+/** Scope + text part of the task JQL (no board/status/order): narrows sprint & backlog issues. */
+async function taskFilterJql(c: Credentials, scope: TaskScope, text: string, signal?: AbortSignal): Promise<string> {
   const parts: string[] = [];
   if (scope === 'mine') parts.push('assignee = currentUser()');
-  const t = text.trim().replace(/["\\]/g, ' ').trim();
-  if (t) {
-    const or = [`text ~ "${t}"`];
-    if (!/\s/.test(t) && t.length >= 2) or.push(`summary ~ "${t}*"`);
-    parts.push(`(${or.join(' OR ')})`);
-  }
+  const t = await textJql(c, text, signal);
+  if (t) parts.push(t);
   return parts.join(' AND ');
 }
 
@@ -229,7 +243,39 @@ export interface TaskPage {
   total: number | null;
 }
 
-const TASK_FIELDS = ['summary', 'status', 'priority', 'issuetype', 'project', 'updated', 'duedate', 'assignee'];
+const TASK_FIELDS = [
+  'summary', 'status', 'priority', 'issuetype', 'project', 'updated', 'duedate', 'assignee',
+  // Plain estimate fields (seconds): present even when the timetracking object is empty.
+  'timeoriginalestimate', 'timeestimate',
+];
+
+/** Fields to request for task rows, including this site's Tester field. */
+async function taskFields(c: Credentials): Promise<{ fields: string[]; ids: CustomFieldIds }> {
+  const ids = await customFieldIds(c);
+  return { fields: [...TASK_FIELDS, ...(ids.tester ? [ids.tester.id] : [])], ids };
+}
+
+/** Jira issue (search or agile response) → task row. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toTask(key: string, f: Record<string, any>, ids: CustomFieldIds): Task {
+  const secs = (v: unknown) => (typeof v === 'number' ? v : null);
+  return {
+    key,
+    summary: f.summary,
+    status: f.status?.name,
+    statusCategory: toStatusCategory(f.status?.statusCategory?.key),
+    priority: f.priority?.name ?? null,
+    issueType: f.issuetype?.name,
+    projectKey: f.project?.key,
+    projectName: f.project?.name,
+    updated: f.updated,
+    dueDate: f.duedate ?? null,
+    assignee: f.assignee ? toPerson(f.assignee) : null,
+    estimateSeconds: secs(f.timeoriginalestimate) ?? secs(f.timetracking?.originalEstimateSeconds),
+    remainingSeconds: secs(f.timeestimate) ?? secs(f.timetracking?.remainingEstimateSeconds),
+    testers: ids.tester ? toPeople(f[ids.tester.id]) : [],
+  };
+}
 
 /**
  * One page of tasks. Jira's search pages forward with tokens (no random access), so callers
@@ -241,65 +287,30 @@ async function tasksPage(
   page: { token: string | null; size: number; count?: boolean },
   signal?: AbortSignal,
 ): Promise<TaskPage> {
-  interface F {
-    summary: string;
-    status: { name: string; statusCategory?: { key: string } };
-    priority?: { name: string } | null;
-    issuetype: { name: string };
-    project: { key: string; name: string };
-    updated: string;
-    duedate: string | null;
-    assignee?: RawUser | null;
-  }
   interface Res {
-    issues: { key: string; fields: F }[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    issues: { key: string; fields: Record<string, any> }[];
     nextPageToken?: string;
     isLast?: boolean;
   }
-  let { jql, withKey } = await taskJql(c, q, signal);
-  const run = (j: string) =>
-    Promise.all([
-      jiraGet<Res>(
-        c,
-        '/search/jql',
-        { jql: j, fields: TASK_FIELDS.join(','), maxResults: page.size, ...(page.token ? { nextPageToken: page.token } : {}) },
-        signal,
-      ),
-      // Totals are a nice-to-have; never fail the page for them.
-      page.count === false
-        ? Promise.resolve(null)
-        : jiraRequest<{ count: number }>(c, 'POST', '/search/approximate-count', { data: { jql: j } }, signal).then(
-            (r) => r.count,
-            () => null,
-          ),
-    ]);
-  let res: Res;
-  let total: number | null;
-  try {
-    [res, total] = await run(jql);
-  } catch (e) {
-    // `key = X` errors when that project/issue doesn't exist: retry as plain text search.
-    if (!withKey || !(e instanceof ApiError) || e.status !== 400) throw e;
-    ({ jql } = await taskJql(c, { ...q, text: q.text.replace(/-/g, ' ') }, signal));
-    [res, total] = await run(jql);
-  }
+  const [jql, { fields, ids }] = await Promise.all([taskJql(c, q, signal), taskFields(c)]);
+  const [res, total] = await Promise.all([
+    jiraGet<Res>(
+      c,
+      '/search/jql',
+      { jql, fields: fields.join(','), maxResults: page.size, ...(page.token ? { nextPageToken: page.token } : {}) },
+      signal,
+    ),
+    // Totals are a nice-to-have; never fail the page for them.
+    page.count === false
+      ? Promise.resolve(null)
+      : jiraRequest<{ count: number }>(c, 'POST', '/search/approximate-count', { data: { jql } }, signal).then(
+          (r) => r.count,
+          () => null,
+        ),
+  ]);
   return {
-    tasks: res.issues.map((i) => {
-      const cat = i.fields.status.statusCategory?.key;
-      return {
-        key: i.key,
-        summary: i.fields.summary,
-        status: i.fields.status.name,
-        statusCategory: cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown',
-        priority: i.fields.priority?.name ?? null,
-        issueType: i.fields.issuetype.name,
-        projectKey: i.fields.project.key,
-        projectName: i.fields.project.name,
-        updated: i.fields.updated,
-        dueDate: i.fields.duedate,
-        assignee: i.fields.assignee ? toPerson(i.fields.assignee) : null,
-      };
-    }),
+    tasks: res.issues.map((i) => toTask(i.key, i.fields, ids)),
     nextPageToken: res.isLast ? null : (res.nextPageToken ?? null),
     total,
   };
@@ -369,7 +380,7 @@ interface FieldInfo {
   id: string;
   name: string;
   custom?: boolean;
-  schema?: { type?: string; custom?: string };
+  schema?: { type?: string; custom?: string; items?: string };
 }
 /** Site-wide field list (custom field ids differ per site). Cached per site. */
 const fieldCache = new Map<string, Promise<FieldInfo[]>>();
@@ -382,15 +393,37 @@ function fieldList(c: Credentials): Promise<FieldInfo[]> {
   }
   return p;
 }
-/** Ids of the Story points and Sprint custom fields on this site (if any). */
-async function agileFieldIds(c: Credentials): Promise<{ storyPoints?: string; sprint?: string }> {
+export interface CustomFieldIds {
+  storyPoints?: string;
+  sprint?: string;
+  /** The site's "Tester" user field, and whether it holds several people. */
+  tester?: { id: string; multi: boolean };
+}
+
+/** Ids of the Story points, Sprint and Tester custom fields on this site (if any). */
+async function customFieldIds(c: Credentials): Promise<CustomFieldIds> {
   const fields = await fieldList(c);
   const storyPoints =
     fields.find((f) => /^story point estimate$/i.test(f.name)) ??
     fields.find((f) => /^story points?$/i.test(f.name)) ??
     fields.find((f) => f.schema?.custom?.endsWith(':jsw-story-points'));
   const sprint = fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint') ?? fields.find((f) => f.name === 'Sprint');
-  return { storyPoints: storyPoints?.id, sprint: sprint?.id };
+  const isUserField = (f: FieldInfo) => f.schema?.type === 'user' || (f.schema?.type === 'array' && f.schema.items === 'user');
+  const tester =
+    fields.find((f) => /^testers?$/i.test(f.name.trim()) && isUserField(f)) ??
+    fields.find((f) => /\btesters?\b/i.test(f.name) && isUserField(f));
+  return {
+    storyPoints: storyPoints?.id,
+    sprint: sprint?.id,
+    tester: tester ? { id: tester.id, multi: tester.schema?.type === 'array' } : undefined,
+  };
+}
+
+/** One user or a list of users (multi-user picker) → list of people. */
+function toPeople(v: unknown): Person[] {
+  if (!v) return [];
+  const list = Array.isArray(v) ? v : [v];
+  return list.filter((u): u is RawUser => Boolean(u && typeof u === 'object' && 'accountId' in u)).map(toPerson);
 }
 
 export interface SprintRef {
@@ -429,19 +462,21 @@ export interface IssueDetail {
     timeSpentSeconds?: number;
   };
   storyPoints: number | null;
+  testers: Person[];
   /** Field ids found on this site (null when the field doesn't exist). */
-  fieldIds: { storyPoints: string | null };
+  fieldIds: { storyPoints: string | null; tester: { id: string; multi: boolean } | null };
 }
 
 const toStatusCategory = (key?: string): StatusCategory =>
   key === 'new' || key === 'indeterminate' || key === 'done' ? key : 'unknown';
 
 async function issueDetail(c: Credentials, key: string, signal?: AbortSignal): Promise<IssueDetail> {
-  const ids = await agileFieldIds(c);
+  const ids = await customFieldIds(c);
   const fields = [
     'summary', 'description', 'status', 'issuetype', 'project', 'parent', 'assignee', 'reporter', 'priority',
-    'labels', 'duedate', 'created', 'updated', 'fixVersions', 'timetracking',
+    'labels', 'duedate', 'created', 'updated', 'fixVersions', 'timetracking', 'timeoriginalestimate', 'timeestimate',
     ...(ids.storyPoints ? [ids.storyPoints] : []),
+    ...(ids.tester ? [ids.tester.id] : []),
     ...(ids.sprint ? [ids.sprint] : []),
   ];
   const r = await jiraGet<{
@@ -469,9 +504,15 @@ async function issueDetail(c: Credentials, key: string, signal?: AbortSignal): P
     updated: f.updated,
     fixVersions: (f.fixVersions ?? []).map((v: { id: string; name: string }) => ({ id: String(v.id), name: v.name })),
     sprints: ids.sprint ? ((f[ids.sprint] as SprintRef[] | null) ?? []).map((s) => ({ id: s.id, name: s.name, state: s.state })) : [],
-    timetracking: f.timetracking ?? {},
+    // Prefer the timetracking object, falling back to the plain estimate fields (seconds).
+    timetracking: {
+      ...(f.timetracking ?? {}),
+      originalEstimateSeconds: f.timetracking?.originalEstimateSeconds ?? f.timeoriginalestimate ?? undefined,
+      remainingEstimateSeconds: f.timetracking?.remainingEstimateSeconds ?? f.timeestimate ?? undefined,
+    },
     storyPoints: ids.storyPoints && typeof f[ids.storyPoints] === 'number' ? f[ids.storyPoints] : null,
-    fieldIds: { storyPoints: ids.storyPoints ?? null },
+    testers: ids.tester ? toPeople(f[ids.tester.id]) : [],
+    fieldIds: { storyPoints: ids.storyPoints ?? null, tester: ids.tester ?? null },
   };
 }
 
@@ -530,50 +571,45 @@ async function agileIssues(
   c: Credentials,
   path: string,
   jql: string,
-  storyPointsField: string | undefined,
+  ids: CustomFieldIds,
   signal?: AbortSignal,
   cap = 500,
-): Promise<{ tasks: Task[]; points: number[]; estimates: number[] }> {
-  const fields = [...TASK_FIELDS, 'timetracking', ...(storyPointsField ? [storyPointsField] : [])];
+): Promise<{ tasks: Task[]; points: number[] }> {
+  const fields = [...TASK_FIELDS, 'timetracking', ...(ids.storyPoints ? [ids.storyPoints] : []), ...(ids.tester ? [ids.tester.id] : [])];
   const tasks: Task[] = [];
   const points: number[] = [];
-  const estimates: number[] = [];
   for (let startAt = 0; ; ) {
     const r = await agileGet<{
-      issues: { key: string; fields: Record<string, any> }[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      issues: { key: string; fields: Record<string, any> }[];
       total?: number;
       isLast?: boolean;
     }>(c, path, { startAt, maxResults: 100, fields: fields.join(','), ...(jql ? { jql } : {}) }, signal);
     for (const i of r.issues) {
-      const f = i.fields;
-      tasks.push({
-        key: i.key,
-        summary: f.summary,
-        status: f.status?.name,
-        statusCategory: toStatusCategory(f.status?.statusCategory?.key),
-        priority: f.priority?.name ?? null,
-        issueType: f.issuetype?.name,
-        projectKey: f.project?.key,
-        projectName: f.project?.name,
-        updated: f.updated,
-        dueDate: f.duedate ?? null,
-        assignee: f.assignee ? toPerson(f.assignee) : null,
-      });
-      points.push(storyPointsField && typeof f[storyPointsField] === 'number' ? f[storyPointsField] : NaN);
-      estimates.push(f.timetracking?.originalEstimateSeconds ?? 0);
+      tasks.push(toTask(i.key, i.fields, ids));
+      points.push(ids.storyPoints && typeof i.fields[ids.storyPoints] === 'number' ? i.fields[ids.storyPoints] : NaN);
     }
     startAt += r.issues.length;
     if (r.issues.length === 0 || r.isLast || startAt >= (r.total ?? Infinity) || startAt >= cap) break;
   }
-  return { tasks, points, estimates };
+  return { tasks, points };
 }
 
 /**
  * The board's active and future sprints plus its backlog, each with their issues.
  * `jql` narrows issues (e.g. assignee = currentUser(), text search).
  */
-async function sprintBoard(c: Credentials, boardId: string, jql: string, signal?: AbortSignal): Promise<SprintSection[]> {
-  const [{ storyPoints }, sprints] = await Promise.all([agileFieldIds(c), boardSprints(c, boardId, signal)]);
+async function sprintBoard(
+  c: Credentials,
+  boardId: string,
+  filter: { scope: TaskScope; text: string },
+  signal?: AbortSignal,
+): Promise<SprintSection[]> {
+  const [ids, sprints, jql] = await Promise.all([
+    customFieldIds(c),
+    boardSprints(c, boardId, signal),
+    taskFilterJql(c, filter.scope, filter.text, signal),
+  ]);
   const b = encodeURIComponent(boardId);
   const sections = [
     ...sprints
@@ -583,13 +619,13 @@ async function sprintBoard(c: Credentials, boardId: string, jql: string, signal?
   ];
   return Promise.all(
     sections.map(async ({ meta, path }) => {
-      const { tasks, points, estimates } = await agileIssues(c, path, jql, storyPoints, signal);
+      const { tasks, points } = await agileIssues(c, path, jql, ids, signal);
       const known = points.filter((p) => !Number.isNaN(p));
       return {
         ...meta,
         tasks,
         storyPoints: known.length ? known.reduce((a, b2) => a + b2, 0) : null,
-        estimateSeconds: estimates.reduce((a, b2) => a + b2, 0),
+        estimateSeconds: tasks.reduce((a, t) => a + (t.estimateSeconds ?? 0), 0),
       };
     }),
   );
@@ -1188,6 +1224,7 @@ export const api = {
   editMeta,
   updateIssue,
   sprintBoard,
+  customFieldIds,
   transitions,
   transitionIssue,
   issueTypes,
