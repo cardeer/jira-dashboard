@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { IssueStatusBadge } from '@/components/status-badge';
 import { api, ApiError, type Transition } from '@/api';
 import { useSession } from '@/lib/session';
+import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
 import type { StatusCategory } from '../../shared/types';
 
@@ -14,7 +15,14 @@ interface Props {
   status: string;
   category: StatusCategory;
   /** Called after Jira accepted the transition, with the new status. */
-  onChanged: (status: string, category: StatusCategory) => void;
+  onChanged?: (status: string, category: StatusCategory) => void;
+  /**
+   * Staged mode: when set, picking a transition only reports it (nothing is sent to Jira);
+   * the caller applies it later, e.g. on Save.
+   */
+  onStage?: (t: Transition | null) => void;
+  /** Staged transition to preview on the badge. */
+  staged?: Transition | null;
 }
 
 const GROUPS: { category: StatusCategory; label: string }[] = [
@@ -27,7 +35,7 @@ const GROUPS: { category: StatusCategory; label: string }[] = [
 const SEARCH_THRESHOLD = 7;
 
 /** Status badge that opens the issue's available workflow transitions, grouped and searchable. */
-export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
+export function StatusMenu({ issueKey, status, category, onChanged, onStage, staged }: Props) {
   const { creds, onUnauthorized } = useSession();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -39,17 +47,24 @@ export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
 
   async function move(t: Transition) {
     setOpen(false);
+    if (onStage) {
+      // Picking the move that's already staged un-stages it.
+      onStage(staged?.id === t.id ? null : t);
+      return;
+    }
     setBusy(true);
     try {
       await api.transitionIssue(creds, issueKey, t.id);
-      onChanged(t.to.name, t.to.statusCategory);
+      onChanged?.(t.to.name, t.to.statusCategory);
       toast.success(`${issueKey} → ${t.to.name}`);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) onUnauthorized();
       toast.error(`Couldn’t move ${issueKey}`, {
         description:
           (e as Error).message +
-          (e instanceof ApiError && e.status === 400 ? ' (this transition may need fields set in Jira, e.g. a resolution)' : ''),
+          (e instanceof ApiError && e.status === 400
+            ? ' (this transition may need fields set in Jira, e.g. a resolution)'
+            : ''),
       });
     } finally {
       setBusy(false);
@@ -70,7 +85,15 @@ export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
         disabled={busy}
         aria-label={`Status: ${status}. Change status`}
       >
-        <IssueStatusBadge status={status} category={category} />
+        {staged ? (
+          <IssueStatusBadge
+            status={staged.to.name}
+            category={staged.to.statusCategory}
+            className="outline-1 outline-offset-1 outline-primary outline-dashed"
+          />
+        ) : (
+          <IssueStatusBadge status={status} category={category} />
+        )}
         {busy ? (
           <Loader2Icon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
         ) : (
@@ -100,7 +123,7 @@ export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
                     // Searchable by both the target status and the transition's own name.
                     value={`${t.to.name} ${t.name} ${t.id}`}
                     onSelect={() => move(t)}
-                    className="gap-3"
+                    className={cn('gap-3', staged?.id === t.id && 'bg-accent/60')}
                   >
                     <IssueStatusBadge status={t.to.name} category={t.to.statusCategory} className="min-w-0 shrink" />
                     {t.name.toLowerCase() !== t.to.name.toLowerCase() && (
