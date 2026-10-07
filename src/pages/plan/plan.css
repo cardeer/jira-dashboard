@@ -431,8 +431,17 @@
   100% { opacity: 0; }
 }
 
+.stink-line {
+  animation: stink-rise 1.4s ease-in-out infinite;
+}
+@keyframes stink-rise {
+  0% { transform: translateY(6px); opacity: 0; }
+  40% { opacity: 1; }
+  100% { transform: translateY(-10px); opacity: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .pick-impact, .pick-impact-hard, .pick-ring, .pick-spark, .pick-shake, .seat-drop, .poke-card, .poke-finger, .poke-target, .seat-poke-finger, .seat-float, .seat-splat, .screen-splat { animation: none !important; }
+  .pick-impact, .pick-impact-hard, .pick-ring, .pick-spark, .pick-shake, .seat-drop, .poke-card, .poke-finger, .poke-target, .seat-poke-finger, .seat-float, .seat-splat, .screen-splat, .stink-line { animation: none !important; }
   .seat-splat, .screen-splat { opacity: 0.9; }
   .poke-bang, .seat-float, .seat-poke-finger { display: none; }
   .pick-ring, .pick-spark { display: none; }

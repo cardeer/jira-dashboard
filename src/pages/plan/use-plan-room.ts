@@ -44,9 +44,11 @@ export type SeatReaction = { key: ReactionKey; n: number };
 export type Poke = { from: string; fromName: string; n: number };
 
 type PokeMsg = { to: string; fromName: string };
-type ThrowMsg = { to: string; fromName: string };
-/** A tomato in flight from one seat to another. */
-export type Throw = { from: string; to: string; fromName: string; n: number };
+export type ThrowItem = 'tomato' | 'poop';
+const THROW_ITEMS: ThrowItem[] = ['tomato', 'poop'];
+type ThrowMsg = { to: string; fromName: string; item: ThrowItem };
+/** Something in flight from one seat to another. */
+export type Throw = { from: string; to: string; fromName: string; item: ThrowItem; n: number };
 type ReactMsg = { key: ReactionKey };
 
 let fxCounter = 0;
@@ -114,7 +116,8 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
   const showThrow = useCallback((from: string, msg: ThrowMsg) => {
     if (typeof msg.to !== 'string') return;
     // Cap what's in the air so a spammer can't flood the screen.
-    setThrows((t) => [...t.slice(-7), { from, to: msg.to, fromName: String(msg.fromName).slice(0, 30), n: ++fxCounter }]);
+    const item = THROW_ITEMS.includes(msg.item) ? msg.item : 'tomato';
+    setThrows((t) => [...t.slice(-7), { from, to: msg.to, fromName: String(msg.fromName).slice(0, 30), item, n: ++fxCounter }]);
   }, []);
 
   const applyRoom = useCallback((next: RoomState) => {
@@ -212,9 +215,9 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     [showReaction],
   );
   const dismissPoke = useCallback(() => setIncomingPoke(null), []);
-  const throwTomato = useCallback(
-    (to: string) => {
-      const msg = { to, fromName: meRef.current.name };
+  const throwAt = useCallback(
+    (to: string, item: ThrowItem) => {
+      const msg = { to, fromName: meRef.current.name, item };
       showThrow(selfId, msg);
       sendRef.current?.throw(msg);
     },
@@ -240,7 +243,7 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     poke,
     react,
     dismissPoke,
-    throwTomato,
+    throwAt,
     landThrow,
   };
 }

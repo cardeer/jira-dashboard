@@ -1,5 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import type { Throw } from './use-plan-room';
+import type { Throw, ThrowItem } from './use-plan-room';
+
+export const THROWABLES: Record<ThrowItem, { emoji: string; label: string; verb: string; fill: string; edge: string; shine: string }> = {
+  tomato: { emoji: '🍅', label: 'Throw a tomato', verb: 'threw a tomato at you!', fill: '#d62828', edge: '#a4161a', shine: '#ef476f' },
+  poop: { emoji: '💩', label: 'Throw poop', verb: 'threw poop at you!', fill: '#94622f', edge: '#5c3a17', shine: '#c08a52' },
+};
 
 const FLIGHT_MS = 750;
 
@@ -52,14 +57,15 @@ function FlyingTomato({ t, onLand }: { t: Throw; onLand: (t: Throw) => void }) {
   }, [t]);
 
   return (
-    <span ref={ref} className="absolute left-0 top-0 text-3xl leading-none drop-shadow-md" style={{ transform: 'translate(-200px, -200px)' }}>
-      🍅
+    <span ref={ref} data-flying className="absolute left-0 top-0 text-3xl leading-none drop-shadow-md" style={{ transform: 'translate(-200px, -200px)' }}>
+      {THROWABLES[t.item].emoji}
     </span>
   );
 }
 
 /** Irregular splat blob; `seed` keeps each splat's shape stable. */
-export function SplatBlob({ seed, className }: { seed: number; className?: string }) {
+export function SplatBlob({ seed, item = 'tomato', className }: { seed: number; item?: ThrowItem; className?: string }) {
+  const look = THROWABLES[item];
   const { path, drops } = useMemo(() => {
     let r = seed * 9301 + 49297;
     const rand = () => (r = (r * 9301 + 49297) % 233280) / 233280;
@@ -87,25 +93,41 @@ export function SplatBlob({ seed, className }: { seed: number; className?: strin
   }, [seed]);
   return (
     <svg viewBox="0 0 100 100" overflow="visible" className={className} aria-hidden>
-      <path d={path} fill="#d62828" stroke="#a4161a" strokeWidth="2" strokeLinejoin="round" />
+      <path d={path} fill={look.fill} stroke={look.edge} strokeWidth="2" strokeLinejoin="round" />
       {drops.map((dr, i) => (
-        <circle key={`d${i}`} cx={dr.cx} cy={dr.cy} r={dr.r} fill="#d62828" />
+        <circle key={`d${i}`} cx={dr.cx} cy={dr.cy} r={dr.r} fill={look.fill} />
       ))}
-      <circle cx="42" cy="44" r="9" fill="#ef476f" opacity="0.6" />
-      {[
-        [36, 58],
-        [58, 40],
-        [60, 60],
-        [48, 30],
-      ].map(([x, y], i) => (
-        <ellipse key={i} cx={x} cy={y} rx="2.4" ry="1.4" fill="#ffd166" />
-      ))}
+      <circle cx="42" cy="44" r="9" fill={look.shine} opacity="0.6" />
+      {item === 'tomato' &&
+        [
+          [36, 58],
+          [58, 40],
+          [60, 60],
+          [48, 30],
+        ].map(([x, y], i) => <ellipse key={i} cx={x} cy={y} rx="2.4" ry="1.4" fill="#ffd166" />)}
+      {item === 'poop' && <Stink />}
     </svg>
   );
 }
 
+/** Wavy green stink lines rising off a poop splat. */
+function Stink() {
+  return (
+    <g fill="none" stroke="#7bc96f" strokeWidth="3" strokeLinecap="round" opacity="0.85">
+      {[34, 50, 66].map((x, i) => (
+        <path
+          key={x}
+          className="stink-line"
+          style={{ animationDelay: `${i * 0.25}s` }}
+          d={`M${x},20 q-6,-7 0,-14 q6,-7 0,-14`}
+        />
+      ))}
+    </g>
+  );
+}
+
 /** Shown to whoever got hit: a big splat on their screen that slides away. */
-export function TomatoScreen({ fromName, n, onDone }: { fromName: string; n: number; onDone: () => void }) {
+export function TomatoScreen({ fromName, item, n, onDone }: { fromName: string; item: ThrowItem; n: number; onDone: () => void }) {
   useEffect(() => {
     navigator.vibrate?.(120);
     const t = setTimeout(onDone, 2800);
@@ -115,10 +137,10 @@ export function TomatoScreen({ fromName, n, onDone }: { fromName: string; n: num
   return (
     <div className="pointer-events-none fixed inset-0 z-[66] overflow-hidden" role="status" aria-live="assertive">
       <div className="screen-splat absolute" style={pos}>
-        <SplatBlob seed={n} className="size-[min(70vw,420px)]" />
+        <SplatBlob seed={n} item={item} className="size-[min(70vw,420px)]" />
       </div>
       <p className="screen-splat-text absolute inset-x-0 bottom-16 text-center text-2xl font-black text-white [text-shadow:0_2px_12px_rgb(0_0_0/0.6)]">
-        🍅 {fromName} threw a tomato at you!
+        {THROWABLES[item].emoji} {fromName} {THROWABLES[item].verb}
       </p>
     </div>
   );

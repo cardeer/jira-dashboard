@@ -31,10 +31,10 @@ import type { GameProps } from './games/kit';
 import { GachaReveal, type RevealedVote } from './gacha-reveal';
 import { PickBurst } from './pick-burst';
 import { PokeAlert } from './poke-alert';
-import { SplatBlob, TomatoLayer, TomatoScreen } from './tomato';
+import { SplatBlob, THROWABLES, TomatoLayer, TomatoScreen } from './tomato';
 import { roomLink } from './index';
 import { formatNumber, isNumeric, numericScale, tryParsePoints, voteStats } from './points';
-import { REACTIONS, usePlanRoom, type Member, type ReactionKey, type RoomConfig, type SeatReaction, type Throw } from './use-plan-room';
+import { REACTIONS, usePlanRoom, type Member, type ReactionKey, type RoomConfig, type SeatReaction, type Throw, type ThrowItem } from './use-plan-room';
 import './plan.css';
 
 const NAME_KEY = 'plan.name';
@@ -177,7 +177,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     poke,
     react,
     dismissPoke,
-    throwTomato,
+    throwAt,
     landThrow,
   } = usePlanRoom(
     roomId,
@@ -203,21 +203,21 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     poke(id);
   };
   const lastThrow = useRef(0);
-  const tomatoSeat = (id: string) => {
+  const throwSeat = (id: string, item: ThrowItem) => {
     const now = Date.now();
     if (now - lastThrow.current < 1500) return;
     lastThrow.current = now;
-    throwTomato(id);
+    throwAt(id, item);
   };
-  // Splats stuck on seats (seat id -> splat id), and the big one when I'm the target.
-  const [splats, setSplats] = useState<Record<string, number>>({});
-  const [hitMe, setHitMe] = useState<{ fromName: string; n: number } | null>(null);
+  // Splats stuck on seats (seat id -> latest splat), and the big one when I'm the target.
+  const [splats, setSplats] = useState<Record<string, { n: number; item: ThrowItem }>>({});
+  const [hitMe, setHitMe] = useState<{ fromName: string; item: ThrowItem; n: number } | null>(null);
   const onTomatoLand = (t: Throw) => {
     landThrow(t.n);
     if (!document.querySelector(`[data-seat="${CSS.escape(t.to)}"]`)) return;
-    setSplats((x) => ({ ...x, [t.to]: t.n }));
-    setTimeout(() => setSplats((x) => (x[t.to] === t.n ? (({ [t.to]: _gone, ...rest }) => rest)(x) : x)), 4600);
-    if (t.to === selfId) setHitMe({ fromName: t.fromName, n: t.n });
+    setSplats((x) => ({ ...x, [t.to]: { n: t.n, item: t.item } }));
+    setTimeout(() => setSplats((x) => (x[t.to]?.n === t.n ? (({ [t.to]: _gone, ...rest }) => rest)(x) : x)), 4600);
+    if (t.to === selfId) setHitMe({ fromName: t.fromName, item: t.item, n: t.n });
   };
   const sendReaction = (key: ReactionKey) => {
     if (reactCooldown) return;
@@ -364,7 +364,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                       poked={poked[s.id]}
                       splat={splats[s.id]}
                       onPoke={s.self ? undefined : () => pokeSeat(s.id, s.name)}
-                      onTomato={s.self ? undefined : () => tomatoSeat(s.id)}
+                      onThrow={s.self ? undefined : (item) => throwSeat(s.id, item)}
                     >
                     <div
                       data-seat-card
@@ -411,7 +411,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them or throw a 🍅.</p>
+            <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them or throw a 🍅 or 💩.</p>
             {room.revealed && revealed.length > 0 && (
               <RevealSummary votes={revealed} points={points} onReplay={() => setShowReveal(true)} />
             )}
@@ -512,7 +512,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
       />
 
       <TomatoLayer throws={throws} onLand={onTomatoLand} />
-      {hitMe && <TomatoScreen key={hitMe.n} fromName={hitMe.fromName} n={hitMe.n} onDone={() => setHitMe(null)} />}
+      {hitMe && <TomatoScreen key={hitMe.n} fromName={hitMe.fromName} item={hitMe.item} n={hitMe.n} onDone={() => setHitMe(null)} />}
       {incomingPoke && <PokeAlert key={incomingPoke.n} fromName={incomingPoke.fromName} onClose={dismissPoke} />}
 
       {showReveal && room.revealed && revealed.length > 0 && (
@@ -561,7 +561,7 @@ function RevealSummary({ votes, points, onReplay }: { votes: RevealedVote[]; poi
 }
 
 /**
- * Wraps a seat card. Other people's seats open a menu (poke / tomato). Every view shows the
+ * Wraps a seat card. Other people's seats open a menu (poke / throw). Every view shows the
  * poke jab when `poked` changes, the splat when `splat` changes, and wobbles the card for both.
  */
 function SeatActions({
@@ -569,19 +569,19 @@ function SeatActions({
   poked,
   splat,
   onPoke,
-  onTomato,
+  onThrow,
   children,
 }: {
   name: string;
   poked?: number;
-  splat?: number;
+  splat?: { n: number; item: ThrowItem };
   onPoke?: () => void;
-  onTomato?: () => void;
+  onThrow?: (item: ThrowItem) => void;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const firstPoke = useRef(poked);
-  const hitKey = `${poked ?? ''}:${splat ?? ''}`;
+  const hitKey = `${poked ?? ''}:${splat?.n ?? ''}`;
   const firstHit = useRef(hitKey);
   useEffect(() => {
     if (hitKey === firstHit.current) return;
@@ -604,13 +604,13 @@ function SeatActions({
         </span>
       )}
       {splat !== undefined && (
-        <span key={`s${splat}`} className="seat-splat" aria-hidden>
-          <SplatBlob seed={splat} className="size-full" />
+        <span key={`s${splat.n}`} className="seat-splat" aria-hidden>
+          <SplatBlob seed={splat.n} item={splat.item} className="size-full" />
         </span>
       )}
     </>
   );
-  if (!onPoke || !onTomato) {
+  if (!onPoke || !onThrow) {
     return (
       <div ref={ref} className="relative">
         {children}
@@ -622,10 +622,10 @@ function SeatActions({
     <div ref={ref} className="relative">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" aria-label={`Poke or throw a tomato at ${name}`} className="group relative block rounded-lg">
+          <button type="button" aria-label={`Poke or throw something at ${name}`} className="group relative block rounded-lg">
             {children}
             <span className="pointer-events-none absolute inset-x-0 -bottom-2 mx-auto w-max rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-bold text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-              👉 / 🍅
+              👉 🍅 💩
             </span>
           </button>
         </DropdownMenuTrigger>
@@ -634,9 +634,11 @@ function SeatActions({
           <DropdownMenuItem onSelect={onPoke}>
             <span aria-hidden>👉</span> Poke
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={onTomato}>
-            <span aria-hidden>🍅</span> Throw a tomato
-          </DropdownMenuItem>
+          {(Object.keys(THROWABLES) as ThrowItem[]).map((item) => (
+            <DropdownMenuItem key={item} onSelect={() => onThrow(item)}>
+              <span aria-hidden>{THROWABLES[item].emoji}</span> {THROWABLES[item].label}
+            </DropdownMenuItem>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
       {extras}
