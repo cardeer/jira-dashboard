@@ -275,7 +275,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
               {seats.map((s) => {
                 const v = voteOf(s);
                 return (
-                  <li key={s.id} className="flex w-20 flex-col items-center gap-1.5">
+                  <li key={s.id} className="flex w-28 flex-col items-center gap-1.5">
                     <div
                       key={v === null ? 'empty' : room.revealed ? 'up' : `down-${s.picks ?? 0}`}
                       className={cn(
@@ -291,13 +291,13 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                       {/* Fixed intensity: the burst must not hint at the hidden value. */}
                       {v !== null && !room.revealed && (s.picks ?? 0) > 0 && <PickBurst intensity={0.5} />}
                     </div>
-                    <div className="flex w-full items-center justify-center gap-1 text-xs">
-                      {s.host && <CrownIcon className="size-3 shrink-0 text-amber-500" aria-label="Host" />}
-                      <span className={cn('truncate', s.self && 'font-semibold')} title={s.name}>
+                    <div className="flex w-full items-start justify-center gap-1 text-xs leading-snug">
+                      {s.host && <CrownIcon className="mt-0.5 size-3 shrink-0 text-amber-500" aria-label="Host" />}
+                      <span className={cn('min-w-0 text-center break-words', s.self && 'font-semibold')} title={s.name}>
                         {s.name}
                       </span>
                       {s.self && (
-                        <button type="button" onClick={() => setRenaming(true)} className="text-muted-foreground hover:text-foreground" aria-label="Change your name">
+                        <button type="button" onClick={() => setRenaming(true)} className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground" aria-label="Change your name">
                           <PencilIcon className="size-3" />
                         </button>
                       )}
