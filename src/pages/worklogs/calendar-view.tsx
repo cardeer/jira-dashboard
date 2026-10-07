@@ -5,6 +5,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { formatDay, formatDuration, fromISO, isWeekend, monthGrid, timeRange, toISO } from '@/dates';
 import { cn } from '@/lib/utils';
 import type { WorklogEntry } from '../../../shared/types';
+import { PersonAvatar } from '@/components/person-avatar';
 import { hours } from './aggregate';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -24,9 +25,17 @@ interface Props {
   month: string;
   /** Omit for read-only calendars (viewing someone else's logs). */
   onDayClick?: (date: string) => void;
+  /** All-members mode: chips per person instead of per log. */
+  showPeople?: boolean;
 }
 
-export function CalendarView({ entries, month, onDayClick }: Props) {
+interface Chip {
+  key: string;
+  label: string;
+  seconds: number;
+}
+
+export function CalendarView({ entries, month, onDayClick, showPeople = false }: Props) {
   const { days } = useMemo(() => monthGrid(month), [month]);
   const today = toISO(new Date());
 
@@ -50,6 +59,17 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
         {days.map((day, i) => {
           const list = byDay.get(day) ?? [];
           const total = list.reduce((s, e) => s + e.timeSpentSeconds, 0);
+          const chips: Chip[] = showPeople
+            ? [
+                ...list
+                  .reduce((m, e) => {
+                    const c = m.get(e.authorId) ?? { key: e.authorId, label: e.authorName.split(/\s+/)[0], seconds: 0 };
+                    c.seconds += e.timeSpentSeconds;
+                    return m.set(e.authorId, c);
+                  }, new Map<string, Chip>())
+                  .values(),
+              ].sort((a, b) => b.seconds - a.seconds)
+            : list.map((e) => ({ key: e.id, label: e.issueKey, seconds: e.timeSpentSeconds }));
           const inMonth = day.startsWith(month);
           const isToday = day === today;
 
@@ -78,7 +98,7 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
                 </span>
                 {total > 0 ? (
                   <span className="flex items-center gap-1 text-xs font-semibold tabular-nums">
-                    <span className={cn('size-1.5 rounded-full', loadDot(total))} />
+                    {!showPeople && <span className={cn('size-1.5 rounded-full', loadDot(total))} />}
                     {hours(total)}h
                   </span>
                 ) : (
@@ -88,20 +108,20 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
                 )}
               </div>
               <div className="grid gap-0.5">
-                {list.slice(0, MAX_CHIPS).map((e) => (
+                {chips.slice(0, MAX_CHIPS).map((c) => (
                   <span
-                    key={e.id}
+                    key={c.key}
                     className={cn(
                       'truncate rounded bg-primary/10 px-1.5 py-0.5 text-[11px] leading-tight',
                       !inMonth && 'opacity-60',
                     )}
                   >
-                    <span className="font-semibold text-link">{e.issueKey}</span>{' '}
-                    <span className="tabular-nums">{hours(e.timeSpentSeconds)}h</span>
+                    <span className="font-semibold text-link">{c.label}</span>{' '}
+                    <span className="tabular-nums">{hours(c.seconds)}h</span>
                   </span>
                 ))}
-                {list.length > MAX_CHIPS && (
-                  <span className="px-1.5 text-[11px] text-muted-foreground">+{list.length - MAX_CHIPS} more</span>
+                {chips.length > MAX_CHIPS && (
+                  <span className="px-1.5 text-[11px] text-muted-foreground">+{chips.length - MAX_CHIPS} more</span>
                 )}
               </div>
             </button>
@@ -112,7 +132,7 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
             <HoverCard key={day} openDelay={120} closeDelay={60}>
               <HoverCardTrigger asChild>{cell}</HoverCardTrigger>
               <HoverCardContent side="right" align="start" className="w-80 p-0">
-                <DayDetails day={day} list={list} total={total} canLog={Boolean(onDayClick)} />
+                <DayDetails day={day} list={list} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} />
               </HoverCardContent>
             </HoverCard>
           );
@@ -122,7 +142,19 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
   );
 }
 
-function DayDetails({ day, list, total, canLog }: { day: string; list: WorklogEntry[]; total: number; canLog: boolean }) {
+function DayDetails({
+  day,
+  list,
+  total,
+  canLog,
+  showPeople,
+}: {
+  day: string;
+  list: WorklogEntry[];
+  total: number;
+  canLog: boolean;
+  showPeople: boolean;
+}) {
   return (
     <div className="text-sm">
       <div className="flex items-center justify-between border-b px-3 py-2">
@@ -141,6 +173,12 @@ function DayDetails({ day, list, total, canLog }: { day: string; list: WorklogEn
                 </span>
                 <span className="text-xs font-semibold tabular-nums">{formatDuration(e.timeSpentSeconds)}</span>
               </div>
+              {showPeople && (
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  <PersonAvatar person={{ displayName: e.authorName, avatarUrl: e.authorAvatar }} className="size-4" />
+                  {e.authorName}
+                </div>
+              )}
               <div className="truncate">
                 <span className="font-medium text-link">{e.issueKey}</span> {e.summary}
               </div>

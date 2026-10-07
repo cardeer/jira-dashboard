@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { eachDay, formatDay, fromISO, isWeekend, timeRange, toISO } from '@/dates';
 import { cn } from '@/lib/utils';
 import type { WorklogEntry } from '../../../shared/types';
+import { PersonAvatar } from '@/components/person-avatar';
 import { hours } from './aggregate';
 
 const DAY_TARGET_H = 8;
@@ -33,9 +34,11 @@ interface TaskRow {
   perDay: Map<string, WorklogEntry[]>;
   total: number;
 }
+/** A row group: a project (your logs) or a person (all members). */
 interface ProjectGroup {
   key: string;
   name: string;
+  avatar?: string;
   tasks: TaskRow[];
   perDay: Map<string, number>;
   total: number;
@@ -49,7 +52,17 @@ const stickyRight = 'sticky right-0 z-10 w-16 min-w-16 bg-muted text-center font
 const weekendBg =
   'bg-muted/50 bg-[repeating-linear-gradient(45deg,transparent_0_6px,color-mix(in_oklab,var(--border)_80%,transparent)_6px_7px)]';
 
-export function Timesheet({ entries, from, to, site }: { entries: WorklogEntry[]; from: string; to: string; site: string }) {
+interface Props {
+  entries: WorklogEntry[];
+  from: string;
+  to: string;
+  site: string;
+  /** 'project' for one person's logs; 'person' (person → tasks) when viewing all members. */
+  groupBy?: 'project' | 'person';
+}
+
+export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Props) {
+  const byPerson = groupBy === 'person';
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const today = toISO(new Date());
   const days = useMemo(() => eachDay(from, to), [from, to]);
@@ -76,14 +89,16 @@ export function Timesheet({ entries, from, to, site }: { entries: WorklogEntry[]
     const dayTotals = new Map<string, number>();
     let grandTotal = 0;
     for (const e of entries) {
-      const p: ProjectGroup = projects.get(e.projectKey) ?? {
-        key: e.projectKey,
-        name: e.projectName,
+      const groupKey = byPerson ? e.authorId : e.projectKey;
+      const p: ProjectGroup = projects.get(groupKey) ?? {
+        key: groupKey,
+        name: byPerson ? e.authorName : e.projectName,
+        avatar: byPerson ? e.authorAvatar : undefined,
         tasks: [],
         perDay: new Map(),
         total: 0,
       };
-      projects.set(e.projectKey, p);
+      projects.set(groupKey, p);
       let t = p.tasks.find((x) => x.key === e.issueKey);
       if (!t) {
         t = { key: e.issueKey, summary: e.summary, perDay: new Map(), total: 0 };
@@ -99,7 +114,7 @@ export function Timesheet({ entries, from, to, site }: { entries: WorklogEntry[]
     const groups = [...projects.values()].sort((a, b) => a.name.localeCompare(b.name));
     for (const g of groups) g.tasks.sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
     return { groups, dayTotals, grandTotal };
-  }, [entries]);
+  }, [entries, byPerson]);
 
   const toggle = (key: string) =>
     setCollapsed((s) => {
@@ -211,11 +226,15 @@ export function Timesheet({ entries, from, to, site }: { entries: WorklogEntry[]
                     <td className={cn(cellBase, stickyLeft, 'bg-muted')}>
                       <span className="inline-flex items-center gap-1.5">
                         {open ? <ChevronDownIcon className="size-4" /> : <ChevronRightIcon className="size-4" />}
-                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{g.key}</span>
+                        {byPerson ? (
+                          <PersonAvatar person={{ displayName: g.name, avatarUrl: g.avatar }} className="size-5" />
+                        ) : (
+                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{g.key}</span>
+                        )}
                         {g.name}
                       </span>
                     </td>
-                    {cells((d) => g.perDay.get(d) ?? 0, { rowBg: 'bg-muted' })}
+                    {cells((d) => g.perDay.get(d) ?? 0, { rowBg: 'bg-muted', underline: byPerson })}
                     <td className={cn(cellBase, stickyRight)}>{hours(g.total)}</td>
                   </tr>
                   {open &&
@@ -255,7 +274,11 @@ export function Timesheet({ entries, from, to, site }: { entries: WorklogEntry[]
                       const s = dayTotals.get(d) ?? 0;
                       return (
                         <td key={d} className={cn(cellBase, dayCell, 'sticky bottom-0 z-10 border-t-2 bg-card', d === today && 'bg-accent')}>
-                          {s > 0 && <span className={cn('inline-block border-b-[3px] pb-px', loadClass(s))}>{hours(s)}</span>}
+                          {s > 0 && (
+                            <span className={cn(!byPerson && 'inline-block border-b-[3px] pb-px', !byPerson && loadClass(s))}>
+                              {hours(s)}
+                            </span>
+                          )}
                         </td>
                       );
                     })}
@@ -271,7 +294,7 @@ export function Timesheet({ entries, from, to, site }: { entries: WorklogEntry[]
         </table>
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t px-4 py-2.5 text-xs text-muted-foreground">
-        Daily totals:
+        {byPerson ? 'Each person’s day:' : 'Daily totals:'}
         <span className="border-b-[3px] border-amber-500">under {LOW_H}h</span>
         <span className="border-b-[3px] border-emerald-500">{LOW_H}–{DAY_TARGET_H}h</span>
         <span className="border-b-[3px] border-red-500">over {DAY_TARGET_H}h</span>

@@ -44,7 +44,14 @@ export interface WorklogEntry {
   date: string;
   timeSpentSeconds: number;
   comment: string;
+  /** Who logged it. */
+  authorId: string;
+  authorName: string;
+  authorAvatar?: string;
 }
+
+/** Whose logs to load: one account id, or everyone ('all'). */
+export type WorklogScope = string | 'all';
 
 export type TaskFilter = 'open' | 'done' | 'all';
 

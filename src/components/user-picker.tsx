@@ -39,12 +39,12 @@ function useDebounced<T>(value: T, ms: number) {
 }
 
 interface Props {
-  /** The person being viewed; null = me. */
-  value: Person | null;
-  onChange: (person: Person | null) => void;
+  /** The person being viewed; null = me; 'all' = every member. */
+  value: Person | 'all' | null;
+  onChange: (value: Person | 'all' | null) => void;
 }
 
-/** Choose whose work logs to view: you, recent people, or anyone found by Jira user search. */
+/** Choose whose work logs to view: everyone, you, recent people, or anyone found by Jira user search. */
 export function UserPicker({ value, onChange }: Props) {
   const { me, creds } = useSession();
   const [open, setOpen] = useState(false);
@@ -56,8 +56,9 @@ export function UserPicker({ value, onChange }: Props) {
     [creds, q, open],
   );
 
-  const current = value ?? me;
-  const isMe = current.accountId === me.accountId;
+  const everyone = value === 'all';
+  const current = value && value !== 'all' ? value : me;
+  const isMe = !everyone && current.accountId === me.accountId;
 
   function pick(p: Person) {
     if (p.accountId === me.accountId) onChange(null);
@@ -81,7 +82,7 @@ export function UserPicker({ value, onChange }: Props) {
         </div>
         {p.email && <div className="truncate text-xs text-muted-foreground">{p.email}</div>}
       </div>
-      <CheckIcon className={cn(current.accountId === p.accountId ? 'opacity-100' : 'opacity-0')} />
+      <CheckIcon className={cn(!everyone && current.accountId === p.accountId ? 'opacity-100' : 'opacity-0')} />
     </CommandItem>
   );
 
@@ -91,8 +92,12 @@ export function UserPicker({ value, onChange }: Props) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" role="combobox" aria-expanded={open} aria-label="Whose work logs" className="max-w-64 justify-between gap-2 font-normal">
-          <PersonAvatar person={current} className="size-5" />
-          <span className="truncate">{isMe ? 'My work logs' : current.displayName}</span>
+          {everyone ? (
+            <UsersIcon className="text-muted-foreground" />
+          ) : (
+            <PersonAvatar person={current} className="size-5" />
+          )}
+          <span className="truncate">{everyone ? 'All members' : isMe ? 'My work logs' : current.displayName}</span>
           <ChevronsUpDownIcon className="opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -102,6 +107,26 @@ export function UserPicker({ value, onChange }: Props) {
           <CommandList>
             {q.length < 2 ? (
               <>
+                <CommandGroup>
+                  <CommandItem
+                    value="__all"
+                    onSelect={() => {
+                      onChange('all');
+                      setOpen(false);
+                      setQuery('');
+                    }}
+                    className="gap-2"
+                  >
+                    <span className="flex size-6 items-center justify-center rounded-full bg-primary/15 text-primary">
+                      <UsersIcon className="size-3.5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div>All members</div>
+                      <div className="text-xs text-muted-foreground">Everyone’s logs, broken down per person</div>
+                    </div>
+                    <CheckIcon className={cn(everyone ? 'opacity-100' : 'opacity-0')} />
+                  </CommandItem>
+                </CommandGroup>
                 <CommandGroup heading="You">{item(me, '(me)')}</CommandGroup>
                 {others.length > 0 && <CommandGroup heading="Recent">{others.map((p) => item(p))}</CommandGroup>}
                 <div className="flex items-center gap-2 px-3 py-2.5 text-xs text-muted-foreground">

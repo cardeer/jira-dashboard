@@ -9,6 +9,7 @@ import type {
   Task,
   TaskFilter,
   WorklogEntry,
+  WorklogScope,
 } from '../shared/types';
 
 export class ApiError extends Error {
@@ -207,18 +208,28 @@ async function tasks(c: Credentials, filter: TaskFilter, signal?: AbortSignal): 
   });
 }
 
+/** Max issues scanned for one work log query; beyond this the result is marked truncated. */
+const WORKLOG_ISSUE_CAP = { person: 500, all: 1000 };
+
+export interface WorklogResult {
+  entries: WorklogEntry[];
+  /** True when more issues matched than were scanned (narrow the date range). */
+  truncated: boolean;
+}
+
 /**
- * One person's worklogs between two dates (inclusive), across every project.
- * `accountId` null means the signed-in user.
+ * Worklogs between two dates (inclusive), across every project you can browse, for one person
+ * (account id; null = you) or everyone ('all').
  */
 async function worklogs(
   c: Credentials,
   from: string,
   to: string,
-  accountId: string | null,
+  scope: WorklogScope | null,
   signal?: AbortSignal,
-): Promise<WorklogEntry[]> {
-  const authorId = accountId ?? (await me(c, signal)).accountId;
+): Promise<WorklogResult> {
+  const everyone = scope === 'all';
+  const authorId = everyone ? null : (scope ?? (await me(c, signal)).accountId);
 
   // Pad the JQL window by a day each side: worklogDate is evaluated in the viewer's timezone
   // while `started` carries its own offset. We filter precisely below.
@@ -233,21 +244,27 @@ async function worklogs(
     issuetype: { name: string };
     project: { key: string; name: string };
   }
+  const dateJql = `worklogDate >= "${pad(from, -1)}" AND worklogDate <= "${pad(to, 1)}"`;
+  const cap = everyone ? WORKLOG_ISSUE_CAP.all : WORKLOG_ISSUE_CAP.person;
   const issues = await searchIssues<F>(
     c,
-    `worklogAuthor = "${authorId}" AND worklogDate >= "${pad(from, -1)}" AND worklogDate <= "${pad(to, 1)}"`,
+    authorId ? `worklogAuthor = "${authorId}" AND ${dateJql}` : dateJql,
     ['summary', 'status', 'issuetype', 'project'],
     signal,
-    500,
+    cap,
   );
 
   interface RawWorklog {
     id: string;
-    author?: { accountId: string };
+    author?: { accountId: string; displayName?: string; avatarUrls?: Record<string, string> };
     started: string;
     timeSpentSeconds: number;
     comment?: AdfNode | string;
   }
+  // Only ask Jira for worklogs inside the (padded) window, so busy issues stay cheap.
+  const startedAfter = Date.parse(`${pad(from, -1)}T00:00:00Z`);
+  const startedBefore = Date.parse(`${pad(to, 2)}T00:00:00Z`);
+
   const fetchIssueWorklogs = async (issue: (typeof issues)[number]) => {
     const out: WorklogEntry[] = [];
     let startAt = 0;
@@ -255,11 +272,11 @@ async function worklogs(
       const page = await jiraGet<{ worklogs: RawWorklog[]; total: number }>(
         c,
         `/issue/${issue.key}/worklog`,
-        { startAt, maxResults: 1000 },
+        { startAt, maxResults: 1000, startedAfter, startedBefore },
         signal,
       );
       for (const w of page.worklogs) {
-        if (w.author?.accountId !== authorId) continue;
+        if (!w.author || (authorId && w.author.accountId !== authorId)) continue;
         const date = w.started.slice(0, 10);
         if (date < from || date > to) continue;
         out.push({
@@ -274,6 +291,9 @@ async function worklogs(
           date,
           timeSpentSeconds: w.timeSpentSeconds,
           comment: adfToText(w.comment).trim(),
+          authorId: w.author.accountId,
+          authorName: w.author.displayName ?? 'Unknown',
+          authorAvatar: w.author.avatarUrls?.['48x48'] ?? w.author.avatarUrls?.['32x32'],
         });
       }
       startAt += page.worklogs.length;
@@ -294,7 +314,10 @@ async function worklogs(
   };
   await Promise.all(Array.from({ length: Math.min(6, issues.length) }, worker));
 
-  return results.flat().sort((a, b) => (a.started < b.started ? 1 : -1));
+  return {
+    entries: results.flat().sort((a, b) => (a.started < b.started ? 1 : -1)),
+    truncated: issues.length >= cap,
+  };
 }
 
 export interface ProjectRef {

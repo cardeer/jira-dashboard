@@ -3,9 +3,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatDay, formatDuration, timeRange } from '@/dates';
 import { cn } from '@/lib/utils';
 import type { WorklogEntry } from '../../../shared/types';
+import { PersonAvatar } from '@/components/person-avatar';
 import { DAY_TARGET } from './aggregate';
 
-export function ByDay({ entries, site }: { entries: WorklogEntry[]; site: string }) {
+export function ByDay({ entries, site, showPeople = false }: { entries: WorklogEntry[]; site: string; showPeople?: boolean }) {
   const days = useMemo(() => {
     const m = new Map<string, WorklogEntry[]>();
     for (const e of entries) m.set(e.date, [...(m.get(e.date) ?? []), e]);
@@ -24,7 +25,7 @@ export function ByDay({ entries, site }: { entries: WorklogEntry[]; site: string
           <Card key={day} className="gap-0 py-0">
             <CardHeader className="flex items-center justify-between border-b px-4 py-3!">
               <CardTitle className="text-sm">{formatDay(day, { year: 'numeric' })}</CardTitle>
-              <span className={cn('text-sm tabular-nums', secs >= DAY_TARGET ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
+              <span className={cn('text-sm tabular-nums', !showPeople && secs >= DAY_TARGET ? 'font-semibold text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
                 {formatDuration(secs)}
               </span>
             </CardHeader>
@@ -38,6 +39,12 @@ export function ByDay({ entries, site }: { entries: WorklogEntry[]; site: string
                       {r.nextDay && <sup>+1</sup>}
                     </div>
                     <div className="min-w-0 flex-1">
+                      {showPeople && (
+                        <div className="mb-0.5 flex items-center gap-1.5 text-xs font-medium">
+                          <PersonAvatar person={{ displayName: e.authorName, avatarUrl: e.authorAvatar }} className="size-4" />
+                          {e.authorName}
+                        </div>
+                      )}
                       <div className="flex flex-wrap items-baseline gap-x-2">
                         <a href={`${site}/browse/${e.issueKey}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-link hover:underline">
                           {e.issueKey}

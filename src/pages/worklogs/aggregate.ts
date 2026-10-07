@@ -17,6 +17,7 @@ export function summarize(entries: WorklogEntry[], from: string, to: string) {
   const perDay = new Map<string, number>(eachDay(from, to).map((d) => [d, 0]));
   const tasks = new Map<string, TaskGroup>();
   const projects = new Map<string, { key: string; name: string; seconds: number }>();
+  const people = new Map<string, { key: string; name: string; avatar?: string; seconds: number }>();
   let total = 0;
 
   for (const e of entries) {
@@ -37,6 +38,9 @@ export function summarize(entries: WorklogEntry[], from: string, to: string) {
     const p = projects.get(e.projectKey) ?? { key: e.projectKey, name: e.projectName, seconds: 0 };
     p.seconds += e.timeSpentSeconds;
     projects.set(e.projectKey, p);
+    const who = people.get(e.authorId) ?? { key: e.authorId, name: e.authorName, avatar: e.authorAvatar, seconds: 0 };
+    who.seconds += e.timeSpentSeconds;
+    people.set(e.authorId, who);
   }
 
   return {
@@ -46,6 +50,7 @@ export function summarize(entries: WorklogEntry[], from: string, to: string) {
     perDay: [...perDay.entries()],
     byTask: [...tasks.values()].sort((a, b) => b.seconds - a.seconds),
     byProject: [...projects.values()].sort((a, b) => b.seconds - a.seconds),
+    byPerson: [...people.values()].sort((a, b) => b.seconds - a.seconds),
   };
 }
 

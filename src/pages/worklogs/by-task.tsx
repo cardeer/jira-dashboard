@@ -6,7 +6,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { formatDay, formatDuration, timeRange } from '@/dates';
 import type { TaskGroup } from './aggregate';
 
-export function ByTask({ groups, total, site }: { groups: TaskGroup[]; total: number; site: string }) {
+export function ByTask({
+  groups,
+  total,
+  site,
+  showPeople = false,
+}: {
+  groups: TaskGroup[];
+  total: number;
+  site: string;
+  showPeople?: boolean;
+}) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (k: string) =>
     setOpen((s) => {
@@ -26,6 +36,7 @@ export function ByTask({ groups, total, site }: { groups: TaskGroup[]; total: nu
             <TableHead>Task</TableHead>
             <TableHead>Project</TableHead>
             <TableHead>Status</TableHead>
+            {showPeople && <TableHead className="text-right">People</TableHead>}
             <TableHead className="text-right">Entries</TableHead>
             <TableHead className="text-right">Time</TableHead>
             <TableHead className="pr-4 text-right">Share</TableHead>
@@ -57,6 +68,11 @@ export function ByTask({ groups, total, site }: { groups: TaskGroup[]; total: nu
                   </TableCell>
                   <TableCell className="text-muted-foreground">{g.projectName}</TableCell>
                   <TableCell className="text-muted-foreground">{g.status}</TableCell>
+                  {showPeople && (
+                    <TableCell className="text-right text-muted-foreground tabular-nums">
+                      {new Set(g.entries.map((e) => e.authorId)).size}
+                    </TableCell>
+                  )}
                   <TableCell className="text-right text-muted-foreground tabular-nums">{g.entries.length}</TableCell>
                   <TableCell className="text-right font-semibold tabular-nums">{formatDuration(g.seconds)}</TableCell>
                   <TableCell className="pr-4 text-right text-muted-foreground tabular-nums">{Math.round((g.seconds / total) * 100)}%</TableCell>
@@ -68,6 +84,7 @@ export function ByTask({ groups, total, site }: { groups: TaskGroup[]; total: nu
                       <TableRow key={e.id} className="bg-muted/40 hover:bg-muted/40">
                         <TableCell />
                         <TableCell colSpan={3} className="whitespace-normal text-sm">
+                          {showPeople && <span className="mr-1.5 font-medium">{e.authorName}</span>}
                           <span className="text-muted-foreground">{formatDay(e.date)}</span>{' '}
                           <span className="font-medium tabular-nums">
                             {r.from} – {r.to}
@@ -76,6 +93,7 @@ export function ByTask({ groups, total, site }: { groups: TaskGroup[]; total: nu
                           {e.comment && <span className="text-muted-foreground"> — {e.comment}</span>}
                         </TableCell>
                         <TableCell />
+                        {showPeople && <TableCell />}
                         <TableCell className="text-right tabular-nums">{formatDuration(e.timeSpentSeconds)}</TableCell>
                         <TableCell />
                       </TableRow>

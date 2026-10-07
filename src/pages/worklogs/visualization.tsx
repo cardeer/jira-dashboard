@@ -5,11 +5,21 @@ import { ChartContainer, ChartTooltip, type ChartConfig } from '@/components/ui/
 import { Progress } from '@/components/ui/progress';
 import { formatDay, formatDuration, fromISO } from '@/dates';
 import type { WorklogEntry } from '../../../shared/types';
+import { PersonAvatar } from '@/components/person-avatar';
 import { DAY_TARGET, type Summary } from './aggregate';
 
 const chartConfig = { hours: { label: 'Hours', color: 'var(--primary)' } } satisfies ChartConfig;
 
-export function Visualization({ stats, entries }: { stats: Summary; entries: WorklogEntry[] }) {
+export function Visualization({
+  stats,
+  entries,
+  showPeople = false,
+}: {
+  stats: Summary;
+  entries: WorklogEntry[];
+  /** All-members mode: team stats, people in the tooltip, and a per-person breakdown. */
+  showPeople?: boolean;
+}) {
   const dense = stats.perDay.length > 14;
   const data = useMemo(
     () =>
@@ -27,13 +37,14 @@ export function Visualization({ stats, entries }: { stats: Summary; entries: Wor
     const m = new Map<string, Map<string, { key: string; summary: string; seconds: number }>>();
     for (const e of entries) {
       const day = m.get(e.date) ?? new Map();
-      const t = day.get(e.issueKey) ?? { key: e.issueKey, summary: e.summary, seconds: 0 };
+      const id = showPeople ? e.authorId : e.issueKey;
+      const t = day.get(id) ?? (showPeople ? { key: e.authorName, summary: '', seconds: 0 } : { key: e.issueKey, summary: e.summary, seconds: 0 });
       t.seconds += e.timeSpentSeconds;
-      day.set(e.issueKey, t);
+      day.set(id, t);
       m.set(e.date, day);
     }
     return m;
-  }, [entries]);
+  }, [entries, showPeople]);
 
   const max = Math.max(DAY_TARGET / 3600, ...data.map((d) => d.hours));
 
@@ -41,8 +52,17 @@ export function Visualization({ stats, entries }: { stats: Summary; entries: Wor
     <div className="grid gap-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Total logged" value={formatDuration(stats.total)} />
-        <Stat label="Days with logs" value={String(stats.daysLogged)} sub={`of ${stats.days} in range`} />
-        <Stat label="Avg per logged day" value={stats.daysLogged ? formatDuration(stats.total / stats.daysLogged) : '—'} />
+        {showPeople ? (
+          <>
+            <Stat label="People" value={String(stats.byPerson.length)} sub={`logged in ${stats.daysLogged} of ${stats.days} days`} />
+            <Stat label="Avg per person" value={stats.byPerson.length ? formatDuration(stats.total / stats.byPerson.length) : '—'} />
+          </>
+        ) : (
+          <>
+            <Stat label="Days with logs" value={String(stats.daysLogged)} sub={`of ${stats.days} in range`} />
+            <Stat label="Avg per logged day" value={stats.daysLogged ? formatDuration(stats.total / stats.daysLogged) : '—'} />
+          </>
+        )}
         <Stat
           label="Tasks worked on"
           value={String(stats.byTask.length)}
@@ -54,7 +74,9 @@ export function Visualization({ stats, entries }: { stats: Summary; entries: Wor
         <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle>Hours per day</CardTitle>
-            <CardDescription>Dashed line is the 8h target. Hover a day for its tasks.</CardDescription>
+            <CardDescription>
+              {showPeople ? 'Everyone combined. Hover a day for each person’s time.' : 'Dashed line is the 8h target. Hover a day for its tasks.'}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <ChartContainer config={chartConfig} className="aspect-auto h-64 w-full">
@@ -62,7 +84,7 @@ export function Visualization({ stats, entries }: { stats: Summary; entries: Wor
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} interval={0} fontSize={11} />
                 <YAxis tickLine={false} axisLine={false} width={40} domain={[0, Math.ceil(max)]} allowDecimals={false} />
-                <ReferenceLine y={DAY_TARGET / 3600} stroke="var(--muted-foreground)" strokeDasharray="4 4" />
+                {!showPeople && <ReferenceLine y={DAY_TARGET / 3600} stroke="var(--muted-foreground)" strokeDasharray="4 4" />}
                 <ChartTooltip
                   cursor={{ fill: 'var(--muted)', opacity: 0.6 }}
                   content={({ active, payload }) => {
@@ -120,6 +142,34 @@ export function Visualization({ stats, entries }: { stats: Summary; entries: Wor
           </CardContent>
         </Card>
       </div>
+
+      {showPeople && (
+        <Card>
+          <CardHeader>
+            <CardTitle>By person</CardTitle>
+            <CardDescription>Each member’s logged time in this range.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-x-8 gap-y-4 md:grid-cols-2">
+            {stats.byPerson.map((p) => {
+              const pct = (p.seconds / stats.total) * 100;
+              return (
+                <div key={p.key} className="grid gap-1.5">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <PersonAvatar person={{ displayName: p.name, avatarUrl: p.avatar }} />
+                      <span className="truncate font-medium">{p.name}</span>
+                    </span>
+                    <span className="shrink-0 text-muted-foreground tabular-nums">
+                      {formatDuration(p.seconds)} · {Math.round(pct)}%
+                    </span>
+                  </div>
+                  <Progress value={pct} />
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
-import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshCwIcon } from 'lucide-react';
+import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -47,15 +48,16 @@ export function WorklogsPage() {
   const { creds, me } = useSession();
   const { get, set } = useSearchState();
 
-  // ?user=<accountId> views someone else's logs (read-only); absent means you.
+  // ?user=<accountId> views someone else's logs, ?user=all everyone's (both read-only); absent means you.
   const userParam = get('user');
-  const viewingId = userParam && userParam !== me.accountId ? userParam : null;
+  const everyone = userParam === 'all';
+  const viewingId = !everyone && userParam && userParam !== me.accountId ? userParam : null;
+  const readOnly = everyone || viewingId !== null;
   const [picked, setPicked] = useState<Person | null>(null);
   const personReq = useAsync((s) => (viewingId ? api.user(creds, viewingId, s) : Promise.resolve(null)), [creds, viewingId]);
   // Show the picked person immediately while their profile loads (or when opened from a link).
   const person = viewingId ? (personReq.data ?? (picked?.accountId === viewingId ? picked : null)) : null;
   const firstName = person?.displayName.split(/\s+/)[0] ?? 'They';
-
 
   // URL: ?range=<preset> or ?from=YYYY-MM-DD&to=YYYY-MM-DD, plus ?view=<view>.
   const customFrom = get('from');
@@ -74,31 +76,35 @@ export function WorklogsPage() {
         : presetRange(preset);
   const [logDate, setLogDate] = useState<string | null>(null);
 
-  const { data, loading, error, reload } = useAsync(
-    (s) => api.worklogs(creds, range.from, range.to, viewingId, s),
-    [creds, range.from, range.to, viewingId],
+  const scope = everyone ? 'all' : viewingId;
+  const { data: result, loading, error, reload } = useAsync(
+    (s) => api.worklogs(creds, range.from, range.to, scope, s),
+    [creds, range.from, range.to, scope],
   );
+  const data = result?.entries ?? null;
   const stats = useMemo(() => summarize(data ?? [], range.from, range.to), [data, range.from, range.to]);
 
   return (
     <>
       <PageHeader
-        title={viewingId ? `${person?.displayName ?? 'Someone'}’s work logs` : 'Work logs'}
+        title={everyone ? 'All members’ work logs' : viewingId ? `${person?.displayName ?? 'Someone'}’s work logs` : 'Work logs'}
         description={
-          viewingId
-            ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
-            : 'Time you logged across every project and team.'
+          everyone
+            ? 'Everyone’s logged time on issues you can browse, broken down per person. View only.'
+            : viewingId
+              ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
+              : 'Time you logged across every project and team.'
         }
         actions={
           <>
             <UserPicker
-              value={person}
-              onChange={(p) => {
-                setPicked(p);
-                set({ user: p ? p.accountId : null });
+              value={everyone ? 'all' : person}
+              onChange={(v) => {
+                if (v && v !== 'all') setPicked(v);
+                set({ user: v === 'all' ? 'all' : v ? v.accountId : null });
               }}
             />
-            {!viewingId && (
+            {!readOnly && (
               <Button onClick={() => setLogDate(toISO(new Date()))}>
                 <PlusIcon data-icon="inline-start" /> Log work
               </Button>
@@ -108,6 +114,16 @@ export function WorklogsPage() {
       />
 
       {personReq.error && <ErrorAlert error={personReq.error} onRetry={personReq.reload} />}
+      {result?.truncated && (
+        <Alert className="mb-4">
+          <TriangleAlertIcon />
+          <AlertTitle>Showing a partial result</AlertTitle>
+          <AlertDescription>
+            Too many issues have work logged in this range, so only the most recent ones were scanned. Pick a shorter
+            range for complete totals.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {view === 'calendar' ? (
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -174,20 +190,20 @@ export function WorklogsPage() {
         {data && (
           <div className={cn(loading && 'opacity-60 transition-opacity')}>
             <TabsContent value="timesheet">
-              <Timesheet entries={data} from={range.from} to={range.to} site={creds.site} />
+              <Timesheet entries={data} from={range.from} to={range.to} site={creds.site} groupBy={everyone ? 'person' : 'project'} />
             </TabsContent>
             <TabsContent value="calendar">
-              <CalendarView entries={data} month={month} onDayClick={viewingId ? undefined : setLogDate} />
+              <CalendarView entries={data} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} />
             </TabsContent>
             <TabsContent value="day">
-              <ByDay entries={data} site={creds.site} />
+              <ByDay entries={data} site={creds.site} showPeople={everyone} />
             </TabsContent>
             <TabsContent value="task">
-              <ByTask groups={stats.byTask} total={stats.total} site={creds.site} />
+              <ByTask groups={stats.byTask} total={stats.total} site={creds.site} showPeople={everyone} />
             </TabsContent>
             <TabsContent value="charts">
               <Suspense fallback={<Skeleton className="h-80 w-full" />}>
-                <Visualization stats={stats} entries={data} />
+                <Visualization stats={stats} entries={data} showPeople={everyone} />
               </Suspense>
             </TabsContent>
           </div>
