@@ -22,7 +22,8 @@ interface Props {
   entries: WorklogEntry[];
   /** YYYY-MM */
   month: string;
-  onDayClick: (date: string) => void;
+  /** Omit for read-only calendars (viewing someone else's logs). */
+  onDayClick?: (date: string) => void;
 }
 
 export function CalendarView({ entries, month, onDayClick }: Props) {
@@ -55,10 +56,11 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
           const cell = (
             <button
               type="button"
-              onClick={() => onDayClick(day)}
-              aria-label={`${formatDay(day, { year: 'numeric' })}: ${total ? formatDuration(total) : 'nothing'} logged. Log work`}
+              onClick={onDayClick ? () => onDayClick(day) : undefined}
+              aria-label={`${formatDay(day, { year: 'numeric' })}: ${total ? formatDuration(total) : 'nothing'} logged${onDayClick ? '. Log work' : ''}`}
               className={cn(
-                'group relative flex min-h-28 flex-col gap-1 border-r border-b p-1.5 text-left transition-colors outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                'group relative flex min-h-28 flex-col gap-1 border-r border-b p-1.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+                onDayClick ? 'hover:bg-accent/60' : 'cursor-default',
                 (i + 1) % 7 === 0 && 'border-r-0',
                 isWeekend(day) && 'bg-muted/40',
                 !inMonth && 'bg-muted/60 text-muted-foreground',
@@ -80,7 +82,9 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
                     {hours(total)}h
                   </span>
                 ) : (
-                  <PlusIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  onDayClick && (
+                    <PlusIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  )
                 )}
               </div>
               <div className="grid gap-0.5">
@@ -108,7 +112,7 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
             <HoverCard key={day} openDelay={120} closeDelay={60}>
               <HoverCardTrigger asChild>{cell}</HoverCardTrigger>
               <HoverCardContent side="right" align="start" className="w-80 p-0">
-                <DayDetails day={day} list={list} total={total} />
+                <DayDetails day={day} list={list} total={total} canLog={Boolean(onDayClick)} />
               </HoverCardContent>
             </HoverCard>
           );
@@ -118,7 +122,7 @@ export function CalendarView({ entries, month, onDayClick }: Props) {
   );
 }
 
-function DayDetails({ day, list, total }: { day: string; list: WorklogEntry[]; total: number }) {
+function DayDetails({ day, list, total, canLog }: { day: string; list: WorklogEntry[]; total: number; canLog: boolean }) {
   return (
     <div className="text-sm">
       <div className="flex items-center justify-between border-b px-3 py-2">
@@ -145,7 +149,7 @@ function DayDetails({ day, list, total }: { day: string; list: WorklogEntry[]; t
           );
         })}
       </div>
-      <div className="border-t px-3 py-2 text-xs text-muted-foreground">Click the day to log more work.</div>
+      {canLog && <div className="border-t px-3 py-2 text-xs text-muted-foreground">Click the day to log more work.</div>}
     </div>
   );
 }

@@ -9,7 +9,11 @@ export interface Me {
   accountId: string;
   displayName: string;
   email?: string;
+  avatarUrl?: string;
 }
+
+/** A Jira user whose work logs can be viewed. */
+export type Person = Me;
 
 export type StatusCategory = 'new' | 'indeterminate' | 'done' | 'unknown';
 

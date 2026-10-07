@@ -8,12 +8,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { ErrorAlert } from '@/components/error-alert';
 import { PageHeader } from '@/components/page-header';
+import { UserPicker } from '@/components/user-picker';
 import { api } from '@/api';
 import { PRESETS, formatDuration, fromISO, monthGrid, presetRange, toISO, type Preset } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useSearchState } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
+import type { Person } from '../../../shared/types';
 import { summarize } from './aggregate';
 import { ByDay } from './by-day';
 import { ByTask } from './by-task';
@@ -42,8 +44,18 @@ const shiftMonth = (month: string, by: number) => {
 };
 
 export function WorklogsPage() {
-  const { creds } = useSession();
+  const { creds, me } = useSession();
   const { get, set } = useSearchState();
+
+  // ?user=<accountId> views someone else's logs (read-only); absent means you.
+  const userParam = get('user');
+  const viewingId = userParam && userParam !== me.accountId ? userParam : null;
+  const [picked, setPicked] = useState<Person | null>(null);
+  const personReq = useAsync((s) => (viewingId ? api.user(creds, viewingId, s) : Promise.resolve(null)), [creds, viewingId]);
+  // Show the picked person immediately while their profile loads (or when opened from a link).
+  const person = viewingId ? (personReq.data ?? (picked?.accountId === viewingId ? picked : null)) : null;
+  const firstName = person?.displayName.split(/\s+/)[0] ?? 'They';
+
 
   // URL: ?range=<preset> or ?from=YYYY-MM-DD&to=YYYY-MM-DD, plus ?view=<view>.
   const customFrom = get('from');
@@ -63,22 +75,39 @@ export function WorklogsPage() {
   const [logDate, setLogDate] = useState<string | null>(null);
 
   const { data, loading, error, reload } = useAsync(
-    (s) => api.worklogs(creds, range.from, range.to, s),
-    [creds, range.from, range.to],
+    (s) => api.worklogs(creds, range.from, range.to, viewingId, s),
+    [creds, range.from, range.to, viewingId],
   );
   const stats = useMemo(() => summarize(data ?? [], range.from, range.to), [data, range.from, range.to]);
 
   return (
     <>
       <PageHeader
-        title="Work logs"
-        description="Time you logged across every project and team."
+        title={viewingId ? `${person?.displayName ?? 'Someone'}’s work logs` : 'Work logs'}
+        description={
+          viewingId
+            ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
+            : 'Time you logged across every project and team.'
+        }
         actions={
-          <Button onClick={() => setLogDate(toISO(new Date()))}>
-            <PlusIcon data-icon="inline-start" /> Log work
-          </Button>
+          <>
+            <UserPicker
+              value={person}
+              onChange={(p) => {
+                setPicked(p);
+                set({ user: p ? p.accountId : null });
+              }}
+            />
+            {!viewingId && (
+              <Button onClick={() => setLogDate(toISO(new Date()))}>
+                <PlusIcon data-icon="inline-start" /> Log work
+              </Button>
+            )}
+          </>
         }
       />
+
+      {personReq.error && <ErrorAlert error={personReq.error} onRetry={personReq.reload} />}
 
       {view === 'calendar' ? (
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -148,7 +177,7 @@ export function WorklogsPage() {
               <Timesheet entries={data} from={range.from} to={range.to} site={creds.site} />
             </TabsContent>
             <TabsContent value="calendar">
-              <CalendarView entries={data} month={month} onDayClick={setLogDate} />
+              <CalendarView entries={data} month={month} onDayClick={viewingId ? undefined : setLogDate} />
             </TabsContent>
             <TabsContent value="day">
               <ByDay entries={data} site={creds.site} />

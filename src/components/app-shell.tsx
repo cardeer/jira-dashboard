@@ -2,7 +2,6 @@ import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router';
 import { CalendarClockIcon, ClipboardListIcon, LayoutDashboardIcon, LogOutIcon, RocketIcon } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -13,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ModeToggle } from '@/components/mode-toggle';
+import { PersonAvatar } from '@/components/person-avatar';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
 
@@ -24,13 +24,6 @@ const NAV = [
 
 export function AppShell() {
   const { me, creds, signOut } = useSession();
-  const initials = me.displayName
-    .split(/\s+/)
-    .map((p) => p[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
-
   return (
     <div className="min-h-svh bg-background">
       <header className="sticky top-0 z-30 border-b bg-card">
@@ -60,9 +53,7 @@ export function AppShell() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="rounded-full" aria-label="Account">
-                <Avatar className="size-8">
-                  <AvatarFallback className="text-xs font-semibold">{initials}</AvatarFallback>
-                </Avatar>
+                <PersonAvatar person={me} className="size-8" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">

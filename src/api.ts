@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   Credentials,
   Me,
+  Person,
   Release,
   ReleaseIssue,
   StatusCategory,
@@ -133,9 +134,37 @@ async function searchIssues<F>(c: Credentials, jql: string, fields: string[], si
   return out;
 }
 
+interface RawUser {
+  accountId: string;
+  accountType?: string;
+  active?: boolean;
+  displayName: string;
+  emailAddress?: string;
+  avatarUrls?: Record<string, string>;
+}
+const toPerson = (u: RawUser): Person => ({
+  accountId: u.accountId,
+  displayName: u.displayName,
+  email: u.emailAddress,
+  avatarUrl: u.avatarUrls?.['48x48'] ?? u.avatarUrls?.['32x32'],
+});
+
 async function me(c: Credentials, signal?: AbortSignal): Promise<Me> {
-  const u = await jiraGet<{ accountId: string; displayName: string; emailAddress?: string }>(c, '/myself', {}, signal);
-  return { accountId: u.accountId, displayName: u.displayName, email: u.emailAddress };
+  return toPerson(await jiraGet<RawUser>(c, '/myself', {}, signal));
+}
+
+/** One user by account id (e.g. when a ?user= link is opened). */
+async function user(c: Credentials, accountId: string, signal?: AbortSignal): Promise<Person> {
+  return toPerson(await jiraGet<RawUser>(c, '/user', { accountId }, signal));
+}
+
+/**
+ * Active people matching a name or email. Needs the "Browse users and groups" permission;
+ * Jira returns 403 without it.
+ */
+async function searchUsers(c: Credentials, query: string, signal?: AbortSignal): Promise<Person[]> {
+  const users = await jiraGet<RawUser[]>(c, '/user/search', { query, maxResults: 20 }, signal);
+  return users.filter((u) => u.active !== false && (u.accountType ?? 'atlassian') === 'atlassian').map(toPerson);
 }
 
 async function tasks(c: Credentials, filter: TaskFilter, signal?: AbortSignal): Promise<Task[]> {
@@ -178,9 +207,18 @@ async function tasks(c: Credentials, filter: TaskFilter, signal?: AbortSignal): 
   });
 }
 
-/** All of the current user's worklogs between two dates (inclusive), across every project. */
-async function worklogs(c: Credentials, from: string, to: string, signal?: AbortSignal): Promise<WorklogEntry[]> {
-  const mine = await me(c, signal);
+/**
+ * One person's worklogs between two dates (inclusive), across every project.
+ * `accountId` null means the signed-in user.
+ */
+async function worklogs(
+  c: Credentials,
+  from: string,
+  to: string,
+  accountId: string | null,
+  signal?: AbortSignal,
+): Promise<WorklogEntry[]> {
+  const authorId = accountId ?? (await me(c, signal)).accountId;
 
   // Pad the JQL window by a day each side: worklogDate is evaluated in the viewer's timezone
   // while `started` carries its own offset. We filter precisely below.
@@ -197,7 +235,7 @@ async function worklogs(c: Credentials, from: string, to: string, signal?: Abort
   }
   const issues = await searchIssues<F>(
     c,
-    `worklogAuthor = currentUser() AND worklogDate >= "${pad(from, -1)}" AND worklogDate <= "${pad(to, 1)}"`,
+    `worklogAuthor = "${authorId}" AND worklogDate >= "${pad(from, -1)}" AND worklogDate <= "${pad(to, 1)}"`,
     ['summary', 'status', 'issuetype', 'project'],
     signal,
     500,
@@ -221,7 +259,7 @@ async function worklogs(c: Credentials, from: string, to: string, signal?: Abort
         signal,
       );
       for (const w of page.worklogs) {
-        if (w.author?.accountId !== mine.accountId) continue;
+        if (w.author?.accountId !== authorId) continue;
         const date = w.started.slice(0, 10);
         if (date < from || date > to) continue;
         out.push({
@@ -590,6 +628,8 @@ async function addWorklog(c: Credentials, w: NewWorklog): Promise<void> {
 
 export const api = {
   me,
+  user,
+  searchUsers,
   tasks,
   worklogs,
   projects,
