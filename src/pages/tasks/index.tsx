@@ -26,6 +26,7 @@ import { StatusMenu } from '@/components/status-menu';
 import { TaskDetailsSheet } from '@/components/task-details-sheet';
 import { api, SHOW_ALL_CAP, type Board, type TaskQuery } from '@/api';
 import { formatDay, formatDuration, relativeTime } from '@/dates';
+import { formatPoints } from '@/lib/points';
 import { useSession } from '@/lib/session';
 import { useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
@@ -64,6 +65,8 @@ export function TasksPage() {
   // Show a Tester column only on sites that have a Tester field.
   const fieldIds = useAsync((s) => api.customFieldIds(creds).then((ids) => (s.aborted ? null : ids)), [creds]);
   const hasTester = Boolean(fieldIds.data?.tester);
+  // The site's story-point style estimate (e.g. "Estimate Working Hour"); falls back to time estimates.
+  const pointsName = fieldIds.data?.storyPoints ? (fieldIds.data.storyPointsName ?? 'Story points') : null;
   const columns = hasTester ? 9 : 8;
 
   const [pickedBoard, setPickedBoard] = useState<Board | null>(null);
@@ -250,7 +253,9 @@ export function TasksPage() {
                 <TableHead>Status</TableHead>
                 <TableHead>Assignee</TableHead>
                 {hasTester && <TableHead>Tester</TableHead>}
-                <TableHead className="text-right">Estimate</TableHead>
+                <TableHead className="text-right" title={pointsName ?? 'Original estimate'}>
+                  {pointsName ?? 'Estimate'}
+                </TableHead>
                 <TableHead>Priority</TableHead>
                 <TableHead>Due</TableHead>
                 <TableHead className="pr-4">Updated</TableHead>
@@ -323,7 +328,11 @@ export function TasksPage() {
                       </TableCell>
                     )}
                     <TableCell className="text-right tabular-nums">
-                      {t.estimateSeconds ? (
+                      {pointsName ? (
+                        <span className={cn(t.points === null && 'text-muted-foreground')}>
+                          {formatPoints(t.points, pointsName)}
+                        </span>
+                      ) : t.estimateSeconds ? (
                         <>
                           <div>{formatDuration(t.estimateSeconds)}</div>
                           {t.remainingSeconds !== null && t.remainingSeconds !== t.estimateSeconds && (

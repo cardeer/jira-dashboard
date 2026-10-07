@@ -10,6 +10,7 @@ import { api, type SprintSection } from '@/api';
 import { formatDate, formatDuration } from '@/dates';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
+import { formatPoints } from '@/lib/points';
 import { useAsync } from '@/useAsync';
 import type { StatusCategory, TaskScope } from '../../../shared/types';
 
@@ -31,6 +32,8 @@ export function SprintView({ boardId, scope, text, onOpen, reloadKey }: Props) {
     [creds, boardId, scope, text, reloadKey],
   );
   const [overrides, setOverrides] = useState<Record<string, { status: string; statusCategory: StatusCategory }>>({});
+  const fieldIds = useAsync((s) => api.customFieldIds(creds).then((ids) => (s.aborted ? null : ids)), [creds]);
+  const pointsName = fieldIds.data?.storyPoints ? (fieldIds.data.storyPointsName ?? 'Story points') : null;
 
   if (!boardId) {
     return (
@@ -64,6 +67,7 @@ export function SprintView({ boardId, scope, text, onOpen, reloadKey }: Props) {
           key={section.id}
           section={section}
           overrides={overrides}
+          pointsName={pointsName}
           onOpen={onOpen}
           onStatus={(key, status, statusCategory) => setOverrides((o) => ({ ...o, [key]: { status, statusCategory } }))}
         />
@@ -75,11 +79,14 @@ export function SprintView({ boardId, scope, text, onOpen, reloadKey }: Props) {
 function Section({
   section: s,
   overrides,
+  pointsName,
   onOpen,
   onStatus,
 }: {
   section: SprintSection;
   overrides: Record<string, { status: string; statusCategory: StatusCategory }>;
+  /** Name of the site's estimate field (e.g. "Estimate Working Hour"); null = use time estimates. */
+  pointsName: string | null;
   onOpen: (key: string) => void;
   onStatus: (key: string, status: string, category: StatusCategory) => void;
 }) {
@@ -111,8 +118,10 @@ function Section({
             {tasks.length} issue{tasks.length === 1 ? '' : 's'}
             {tasks.length > 0 && s.state !== 'backlog' && ` · ${done} done`}
           </span>
-          {s.storyPoints !== null && <span>{s.storyPoints} pts</span>}
-          {s.estimateSeconds > 0 && <span>{formatDuration(s.estimateSeconds)} est.</span>}
+          {s.storyPoints !== null && (
+            <span title={pointsName ?? undefined}>{formatPoints(s.storyPoints, pointsName)}</span>
+          )}
+          {!pointsName && s.estimateSeconds > 0 && <span>{formatDuration(s.estimateSeconds)} est.</span>}
         </span>
         {s.goal && <p className="w-full pl-7 text-sm text-muted-foreground">🎯 {s.goal}</p>}
       </button>
@@ -145,9 +154,13 @@ function Section({
                 </span>
                 <span
                   className="w-16 shrink-0 text-right text-xs text-muted-foreground tabular-nums"
-                  title="Original estimate"
+                  title={pointsName ?? 'Original estimate'}
                 >
-                  {t.estimateSeconds ? formatDuration(t.estimateSeconds) : '—'}
+                  {pointsName
+                    ? formatPoints(t.points, pointsName)
+                    : t.estimateSeconds
+                      ? formatDuration(t.estimateSeconds)
+                      : '—'}
                 </span>
                 <span className="w-8 shrink-0" title={`Assignee: ${t.assignee?.displayName ?? 'Unassigned'}`}>
                   {t.assignee ? (

@@ -83,7 +83,10 @@ async function jiraRequest<T>(
       });
     } catch (e) {
       if (axios.isCancel(e)) throw new DOMException('Aborted', 'AbortError');
-      throw new ApiError(0, 'Could not reach Jira (network error, or the /api/jira rewrite is not set up on this host).');
+      throw new ApiError(
+        0,
+        'Could not reach Jira (network error, or the /api/jira rewrite is not set up on this host).',
+      );
     }
     // Only GETs are safe to retry automatically.
     if (res.status === 429 && method === 'GET' && attempt < 3) {
@@ -95,9 +98,7 @@ async function jiraRequest<T>(
     if (res.status >= 400) {
       const body = res.data as { errorMessages?: string[]; errors?: Record<string, string> } | string | undefined;
       const messages =
-        typeof body === 'object' && body
-          ? [...(body.errorMessages ?? []), ...Object.values(body.errors ?? {})]
-          : [];
+        typeof body === 'object' && body ? [...(body.errorMessages ?? []), ...Object.values(body.errors ?? {})] : [];
       const detail = messages.length
         ? messages.join('; ')
         : res.status === 403
@@ -116,10 +117,14 @@ async function jiraRequest<T>(
   }
 }
 
-const jiraGet = <T,>(c: Credentials, path: string, params: Record<string, string | number> = {}, signal?: AbortSignal) =>
+const jiraGet = <T>(c: Credentials, path: string, params: Record<string, string | number> = {}, signal?: AbortSignal) =>
   jiraRequest<T>(c, 'GET', path, { params }, signal);
-const agileGet = <T,>(c: Credentials, path: string, params: Record<string, string | number> = {}, signal?: AbortSignal) =>
-  jiraRequest<T>(c, 'GET', path, { params, api: 'agile' }, signal);
+const agileGet = <T>(
+  c: Credentials,
+  path: string,
+  params: Record<string, string | number> = {},
+  signal?: AbortSignal,
+) => jiraRequest<T>(c, 'GET', path, { params, api: 'agile' }, signal);
 
 async function searchIssues<F>(c: Credentials, jql: string, fields: string[], signal?: AbortSignal, cap = 1000) {
   interface Page {
@@ -244,15 +249,26 @@ export interface TaskPage {
 }
 
 const TASK_FIELDS = [
-  'summary', 'status', 'priority', 'issuetype', 'project', 'updated', 'duedate', 'assignee',
+  'summary',
+  'status',
+  'priority',
+  'issuetype',
+  'project',
+  'updated',
+  'duedate',
+  'assignee',
   // Plain estimate fields (seconds): present even when the timetracking object is empty.
-  'timeoriginalestimate', 'timeestimate',
+  'timeoriginalestimate',
+  'timeestimate',
 ];
 
 /** Fields to request for task rows, including this site's Tester field. */
 async function taskFields(c: Credentials): Promise<{ fields: string[]; ids: CustomFieldIds }> {
   const ids = await customFieldIds(c);
-  return { fields: [...TASK_FIELDS, ...(ids.tester ? [ids.tester.id] : [])], ids };
+  return {
+    fields: [...TASK_FIELDS, ...(ids.storyPoints ? [ids.storyPoints] : []), ...(ids.tester ? [ids.tester.id] : [])],
+    ids,
+  };
 }
 
 /** Jira issue (search or agile response) → task row. */
@@ -273,6 +289,7 @@ function toTask(key: string, f: Record<string, any>, ids: CustomFieldIds): Task 
     assignee: f.assignee ? toPerson(f.assignee) : null,
     estimateSeconds: secs(f.timeoriginalestimate) ?? secs(f.timetracking?.originalEstimateSeconds),
     remainingSeconds: secs(f.timeestimate) ?? secs(f.timetracking?.remainingEstimateSeconds),
+    points: ids.storyPoints && typeof f[ids.storyPoints] === 'number' ? f[ids.storyPoints] : null,
     testers: ids.tester ? toPeople(f[ids.tester.id]) : [],
   };
 }
@@ -344,7 +361,11 @@ async function tasksAll(
     onProgress?.(tasks.slice(0, SHOW_ALL_CAP), first.total);
     token = next.nextPageToken;
   }
-  return { tasks: tasks.slice(0, SHOW_ALL_CAP), total: first.total, truncated: Boolean(token) || tasks.length > SHOW_ALL_CAP };
+  return {
+    tasks: tasks.slice(0, SHOW_ALL_CAP),
+    total: first.total,
+    truncated: Boolean(token) || tasks.length > SHOW_ALL_CAP,
+  };
 }
 
 export interface Transition {
@@ -363,7 +384,10 @@ async function transitions(c: Credentials, issueKey: string, signal?: AbortSigna
     return {
       id: t.id,
       name: t.name,
-      to: { name: t.to.name, statusCategory: cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown' },
+      to: {
+        name: t.to.name,
+        statusCategory: cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown',
+      },
     };
   });
 }
@@ -394,7 +418,9 @@ function fieldList(c: Credentials): Promise<FieldInfo[]> {
   return p;
 }
 export interface CustomFieldIds {
+  /** Story-point style estimate field and its display name (e.g. "Estimate Working Hour"). */
   storyPoints?: string;
+  storyPointsName?: string;
   sprint?: string;
   /** The site's "Tester" user field, and whether it holds several people. */
   tester?: { id: string; multi: boolean };
@@ -403,17 +429,24 @@ export interface CustomFieldIds {
 /** Ids of the Story points, Sprint and Tester custom fields on this site (if any). */
 async function customFieldIds(c: Credentials): Promise<CustomFieldIds> {
   const fields = await fieldList(c);
+  const isNumber = (f: FieldInfo) => f.schema?.type === 'number';
   const storyPoints =
+    // Sites often rename the estimate field; prefer an explicit "Estimate Working Hour(s)".
+    fields.find((f) => /estimate working hours?/i.test(f.name) && isNumber(f)) ??
     fields.find((f) => /^story point estimate$/i.test(f.name)) ??
     fields.find((f) => /^story points?$/i.test(f.name)) ??
     fields.find((f) => f.schema?.custom?.endsWith(':jsw-story-points'));
-  const sprint = fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint') ?? fields.find((f) => f.name === 'Sprint');
-  const isUserField = (f: FieldInfo) => f.schema?.type === 'user' || (f.schema?.type === 'array' && f.schema.items === 'user');
+  const sprint =
+    fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint') ??
+    fields.find((f) => f.name === 'Sprint');
+  const isUserField = (f: FieldInfo) =>
+    f.schema?.type === 'user' || (f.schema?.type === 'array' && f.schema.items === 'user');
   const tester =
     fields.find((f) => /^testers?$/i.test(f.name.trim()) && isUserField(f)) ??
     fields.find((f) => /\btesters?\b/i.test(f.name) && isUserField(f));
   return {
     storyPoints: storyPoints?.id,
+    storyPointsName: storyPoints?.name,
     sprint: sprint?.id,
     tester: tester ? { id: tester.id, multi: tester.schema?.type === 'array' } : undefined,
   };
@@ -464,7 +497,11 @@ export interface IssueDetail {
   storyPoints: number | null;
   testers: Person[];
   /** Field ids found on this site (null when the field doesn't exist). */
-  fieldIds: { storyPoints: string | null; tester: { id: string; multi: boolean } | null };
+  fieldIds: {
+    storyPoints: string | null;
+    storyPointsName: string | null;
+    tester: { id: string; multi: boolean } | null;
+  };
 }
 
 const toStatusCategory = (key?: string): StatusCategory =>
@@ -473,8 +510,23 @@ const toStatusCategory = (key?: string): StatusCategory =>
 async function issueDetail(c: Credentials, key: string, signal?: AbortSignal): Promise<IssueDetail> {
   const ids = await customFieldIds(c);
   const fields = [
-    'summary', 'description', 'status', 'issuetype', 'project', 'parent', 'assignee', 'reporter', 'priority',
-    'labels', 'duedate', 'created', 'updated', 'fixVersions', 'timetracking', 'timeoriginalestimate', 'timeestimate',
+    'summary',
+    'description',
+    'status',
+    'issuetype',
+    'project',
+    'parent',
+    'assignee',
+    'reporter',
+    'priority',
+    'labels',
+    'duedate',
+    'created',
+    'updated',
+    'fixVersions',
+    'timetracking',
+    'timeoriginalestimate',
+    'timeestimate',
     ...(ids.storyPoints ? [ids.storyPoints] : []),
     ...(ids.tester ? [ids.tester.id] : []),
     ...(ids.sprint ? [ids.sprint] : []),
@@ -503,7 +555,9 @@ async function issueDetail(c: Credentials, key: string, signal?: AbortSignal): P
     created: f.created,
     updated: f.updated,
     fixVersions: (f.fixVersions ?? []).map((v: { id: string; name: string }) => ({ id: String(v.id), name: v.name })),
-    sprints: ids.sprint ? ((f[ids.sprint] as SprintRef[] | null) ?? []).map((s) => ({ id: s.id, name: s.name, state: s.state })) : [],
+    sprints: ids.sprint
+      ? ((f[ids.sprint] as SprintRef[] | null) ?? []).map((s) => ({ id: s.id, name: s.name, state: s.state }))
+      : [],
     // Prefer the timetracking object, falling back to the plain estimate fields (seconds).
     timetracking: {
       ...(f.timetracking ?? {}),
@@ -512,7 +566,11 @@ async function issueDetail(c: Credentials, key: string, signal?: AbortSignal): P
     },
     storyPoints: ids.storyPoints && typeof f[ids.storyPoints] === 'number' ? f[ids.storyPoints] : null,
     testers: ids.tester ? toPeople(f[ids.tester.id]) : [],
-    fieldIds: { storyPoints: ids.storyPoints ?? null, tester: ids.tester ?? null },
+    fieldIds: {
+      storyPoints: ids.storyPoints ?? null,
+      storyPointsName: ids.storyPointsName ?? null,
+      tester: ids.tester ?? null,
+    },
   };
 }
 
@@ -528,7 +586,11 @@ async function editMeta(c: Credentials, key: string, signal?: AbortSignal): Prom
   }>(c, `/issue/${encodeURIComponent(key)}/editmeta`, {}, signal);
   return {
     editable: new Set(Object.keys(r.fields)),
-    priorities: (r.fields.priority?.allowedValues ?? []).map((p) => ({ id: String(p.id), name: p.name, iconUrl: p.iconUrl })),
+    priorities: (r.fields.priority?.allowedValues ?? []).map((p) => ({
+      id: String(p.id),
+      name: p.name,
+      iconUrl: p.iconUrl,
+    })),
   };
 }
 
@@ -575,10 +637,15 @@ async function agileIssues(
   signal?: AbortSignal,
   cap = 500,
 ): Promise<{ tasks: Task[]; points: number[] }> {
-  const fields = [...TASK_FIELDS, 'timetracking', ...(ids.storyPoints ? [ids.storyPoints] : []), ...(ids.tester ? [ids.tester.id] : [])];
+  const fields = [
+    ...TASK_FIELDS,
+    'timetracking',
+    ...(ids.storyPoints ? [ids.storyPoints] : []),
+    ...(ids.tester ? [ids.tester.id] : []),
+  ];
   const tasks: Task[] = [];
   const points: number[] = [];
-  for (let startAt = 0; ; ) {
+  for (let startAt = 0; ;) {
     const r = await agileGet<{
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       issues: { key: string; fields: Record<string, any> }[];
@@ -614,7 +681,17 @@ async function sprintBoard(
   const sections = [
     ...sprints
       .sort((x, y) => (x.state === y.state ? 0 : x.state === 'active' ? -1 : 1))
-      .map((s) => ({ meta: { id: String(s.id), name: s.name, state: s.state as 'active' | 'future', goal: s.goal, startDate: s.startDate, endDate: s.endDate }, path: `/board/${b}/sprint/${s.id}/issue` })),
+      .map((s) => ({
+        meta: {
+          id: String(s.id),
+          name: s.name,
+          state: s.state as 'active' | 'future',
+          goal: s.goal,
+          startDate: s.startDate,
+          endDate: s.endDate,
+        },
+        path: `/board/${b}/sprint/${s.id}/issue`,
+      })),
     { meta: { id: 'backlog', name: 'Backlog', state: 'backlog' as const }, path: `/board/${b}/backlog` },
   ];
   return Promise.all(
@@ -657,7 +734,12 @@ interface RawIssueType {
 }
 
 /** People who can be assigned issues in a project. */
-async function assignableUsers(c: Credentials, projectKey: string, query: string, signal?: AbortSignal): Promise<Person[]> {
+async function assignableUsers(
+  c: Credentials,
+  projectKey: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<Person[]> {
   const users = await jiraGet<RawUser[]>(
     c,
     '/user/assignable/search',
@@ -825,7 +907,9 @@ const toBoard = (b: RawBoard): Board => ({
   id: String(b.id),
   name: b.name,
   type: b.type,
-  location: b.location?.displayName ?? (b.location?.projectName ? `${b.location.projectName} (${b.location.projectKey})` : undefined),
+  location:
+    b.location?.displayName ??
+    (b.location?.projectName ? `${b.location.projectName} (${b.location.projectKey})` : undefined),
   projectKey: b.location?.projectKey,
 });
 
@@ -892,7 +976,7 @@ export interface ProjectRef {
 /** Projects the user can browse (for the release project picker). */
 async function projects(c: Credentials, signal?: AbortSignal): Promise<ProjectRef[]> {
   const out: ProjectRef[] = [];
-  for (let startAt = 0; ; ) {
+  for (let startAt = 0; ;) {
     const page = await jiraGet<{ values: ProjectRef[]; isLast?: boolean; total?: number }>(
       c,
       '/project/search',
@@ -1047,7 +1131,8 @@ interface PickerFields {
 }
 type PickerIssue = { key: string; fields: PickerFields };
 const PICKER_FIELDS = ['summary', 'status', 'issuetype', 'project'];
-const RECENT_JQL = '(assignee = currentUser() OR worklogAuthor = currentUser()) AND updated >= -60d ORDER BY updated DESC';
+const RECENT_JQL =
+  '(assignee = currentUser() OR worklogAuthor = currentUser()) AND updated >= -60d ORDER BY updated DESC';
 
 /** "1234" → number only; "NCS-1234" / "ncs1234" → project + number. */
 const KEY_QUERY_RE = /^(?:([A-Za-z][A-Za-z0-9_]*?)-?)?(\d+)$/;

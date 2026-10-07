@@ -110,7 +110,7 @@ const LABELS: Record<keyof Draft, string> = {
   priority: 'priority',
   original: 'original estimate',
   remaining: 'remaining estimate',
-  storyPoints: 'story points',
+  storyPoints: 'estimate',
   testers: 'tester',
   dueDate: 'due date',
   labels: 'labels',
@@ -370,7 +370,7 @@ function Details({
             <span className="tabular-nums">{d.timetracking.timeSpent ?? '—'}</span>
           </Field>
           {d.fieldIds.storyPoints && (
-            <Field label="Story points" changed={'storyPoints' in draft}>
+            <Field label={d.fieldIds.storyPointsName ?? 'Story points'} changed={'storyPoints' in draft}>
               <StoryPointsField
                 value={v.storyPoints}
                 editable={can(d.fieldIds.storyPoints)}
@@ -706,7 +706,7 @@ function StoryPointsField({
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && commit()}
       className="h-8 w-24 tabular-nums"
-      aria-label="Story points"
+      aria-label="Story points estimate"
     />
   );
 }

@@ -32,6 +32,8 @@ export interface Task {
   /** Original estimate / remaining estimate in seconds (null when not set). */
   estimateSeconds: number | null;
   remainingSeconds: number | null;
+  /** The site's story-point style estimate (e.g. "Estimate Working Hour"); null when unset. */
+  points: number | null;
   /** People in the site's "Tester" field (empty when the field doesn't exist or is unset). */
   testers: { accountId: string; displayName: string; avatarUrl?: string }[];
 }
