@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeftIcon, ChevronRightIcon, ListIcon, ListTreeIcon, PlusIcon, RefreshCwIcon, SearchIcon } from 'lucide-react';
+import { ChevronLeftIcon, ChevronRightIcon, ListIcon, ListTreeIcon, Loader2Icon, PlusIcon, RefreshCwIcon, SearchIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,7 +13,7 @@ import { ErrorAlert } from '@/components/error-alert';
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
 import { StatusMenu } from '@/components/status-menu';
-import { api, type Board, type TaskQuery } from '@/api';
+import { api, SHOW_ALL_CAP, type Board, type TaskQuery } from '@/api';
 import { formatDay, relativeTime } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
@@ -64,12 +64,22 @@ export function TasksPage() {
     (s) => (showAll ? Promise.resolve(null) : api.tasksPage(creds, taskQuery, { token: current.tokens[current.index], size }, s)),
     [creds, queryKey, current.index, showAll],
   );
+  // Show all renders rows as each batch of 100 arrives instead of waiting for the whole list.
+  const [partial, setPartial] = useState<{ key: string; tasks: Task[]; total: number | null } | null>(null);
   const everything = useAsync(
-    (s) => (showAll ? api.tasksAll(creds, taskQuery, s) : Promise.resolve(null)),
+    (s) => {
+      if (!showAll) return Promise.resolve(null);
+      setPartial(null); // a new load starts from zero, not from the previous run's rows
+      return api.tasksAll(creds, taskQuery, s, (tasks, total) => {
+        if (!s.aborted) setPartial({ key: queryKey, tasks, total });
+      });
+    },
     [creds, queryKey, showAll],
   );
   const { loading, error, reload } = showAll ? everything : paged;
-  const data = showAll ? everything.data : paged.data;
+  const progress = showAll && everything.loading && partial?.key === queryKey ? partial : null;
+  // While loading, live progress wins over the previous (stale) result.
+  const data = showAll ? (progress ?? everything.data) : paged.data;
 
   // Status changes are applied locally right away (Jira has already accepted them).
   const [overrides, setOverrides] = useState<Record<string, { status: string; statusCategory: StatusCategory }>>({});
@@ -155,7 +165,7 @@ export function TasksPage() {
       {boardReq.error && <ErrorAlert error={boardReq.error} onRetry={boardReq.reload} />}
       {error && <ErrorAlert error={error} onRetry={reload} />}
 
-      <Card className={cn('gap-0 py-0', loading && data && 'opacity-60 transition-opacity')}>
+      <Card className={cn('gap-0 py-0', loading && data && !progress && 'opacity-60 transition-opacity')}>
         <Table>
           <TableHeader>
             <TableRow>
@@ -223,7 +233,17 @@ export function TasksPage() {
             )}
           </TableBody>
         </Table>
-        {showAll && everything.data && rows.length > 0 && (
+        {progress && (
+          <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin" />
+            <span className="tabular-nums">
+              Loading {progress.tasks.length.toLocaleString()}
+              {progress.total !== null && ` of ~${Math.min(progress.total, SHOW_ALL_CAP).toLocaleString()}`} tasks…
+            </span>
+            <span className="text-xs">(switch to Paged for a faster first page)</span>
+          </div>
+        )}
+        {showAll && !progress && everything.data && rows.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-muted-foreground">
             <span className="tabular-nums">
               {everything.data.truncated

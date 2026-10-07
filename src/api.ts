@@ -86,7 +86,8 @@ async function jiraRequest<T>(
     }
     // Only GETs are safe to retry automatically.
     if (res.status === 429 && method === 'GET' && attempt < 3) {
-      await sleep((Number(res.headers['retry-after']) || 2 ** attempt) * 1000);
+      // Honour Jira's Retry-After, but never freeze the UI for long: cap each wait at 10s.
+      await sleep(Math.min(Number(res.headers['retry-after']) || 2 ** attempt, 10) * 1000);
       continue;
     }
     if (res.status === 401) throw new ApiError(401, 'Jira rejected the email / API token');
@@ -293,18 +294,29 @@ async function tasksPage(
 /** Most tasks "Show all" will load before stopping (and reporting truncation). */
 export const SHOW_ALL_CAP = 1000;
 
-/** Every matching task on one page, fetched 100 at a time up to SHOW_ALL_CAP. */
+/**
+ * Every matching task on one page, fetched 100 at a time up to SHOW_ALL_CAP.
+ * `onProgress` gets the rows so far after each batch, so the UI can render while loading.
+ */
 async function tasksAll(
   c: Credentials,
   q: TaskQuery,
   signal?: AbortSignal,
+  onProgress?: (tasks: Task[], total: number | null) => void,
 ): Promise<{ tasks: Task[]; total: number | null; truncated: boolean }> {
   const first = await tasksPage(c, q, { token: null, size: 100 }, signal);
   const tasks = [...first.tasks];
+  onProgress?.(tasks.slice(), first.total);
   let token = first.nextPageToken;
+  const seen = new Set<string>();
   while (token && tasks.length < SHOW_ALL_CAP) {
+    // Defensive: never loop on a token Jira already gave us.
+    if (seen.has(token)) break;
+    seen.add(token);
     const next = await tasksPage(c, q, { token, size: 100, count: false }, signal);
+    if (next.tasks.length === 0) break;
     tasks.push(...next.tasks);
+    onProgress?.(tasks.slice(0, SHOW_ALL_CAP), first.total);
     token = next.nextPageToken;
   }
   return { tasks: tasks.slice(0, SHOW_ALL_CAP), total: first.total, truncated: Boolean(token) || tasks.length > SHOW_ALL_CAP };
