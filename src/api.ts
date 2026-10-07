@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { AdfNode as RichDoc } from '@/lib/adf';
 import type {
   Credentials,
   Me,
@@ -57,7 +58,7 @@ const jiraBase = (c: Credentials, api: keyof typeof API_PATHS = 'core') =>
 /** Talks to Jira Cloud through the same-origin rewrite, using axios. */
 async function jiraRequest<T>(
   c: Credentials,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PUT',
   path: string,
   opts: { params?: Record<string, string | number>; data?: unknown; api?: keyof typeof API_PATHS } = {},
   signal?: AbortSignal,
@@ -208,6 +209,19 @@ async function taskJql(c: Credentials, q: TaskQuery, signal?: AbortSignal): Prom
   return { jql: `${parts.join(' AND ')} ORDER BY updated DESC`, withKey };
 }
 
+/** Scope + text part of the task JQL (no board/status/order): used to narrow sprint & backlog issues. */
+export function taskFilterJql(scope: TaskScope, text: string): string {
+  const parts: string[] = [];
+  if (scope === 'mine') parts.push('assignee = currentUser()');
+  const t = text.trim().replace(/["\\]/g, ' ').trim();
+  if (t) {
+    const or = [`text ~ "${t}"`];
+    if (!/\s/.test(t) && t.length >= 2) or.push(`summary ~ "${t}*"`);
+    parts.push(`(${or.join(' OR ')})`);
+  }
+  return parts.join(' AND ');
+}
+
 export interface TaskPage {
   tasks: Task[];
   nextPageToken: string | null;
@@ -349,6 +363,238 @@ async function transitionIssue(c: Credentials, issueKey: string, transitionId: s
   });
 }
 
+/* ---------- issue details & editing ---------- */
+
+interface FieldInfo {
+  id: string;
+  name: string;
+  custom?: boolean;
+  schema?: { type?: string; custom?: string };
+}
+/** Site-wide field list (custom field ids differ per site). Cached per site. */
+const fieldCache = new Map<string, Promise<FieldInfo[]>>();
+function fieldList(c: Credentials): Promise<FieldInfo[]> {
+  let p = fieldCache.get(c.site);
+  if (!p) {
+    p = jiraGet<FieldInfo[]>(c, '/field');
+    p.catch(() => fieldCache.delete(c.site));
+    fieldCache.set(c.site, p);
+  }
+  return p;
+}
+/** Ids of the Story points and Sprint custom fields on this site (if any). */
+async function agileFieldIds(c: Credentials): Promise<{ storyPoints?: string; sprint?: string }> {
+  const fields = await fieldList(c);
+  const storyPoints =
+    fields.find((f) => /^story point estimate$/i.test(f.name)) ??
+    fields.find((f) => /^story points?$/i.test(f.name)) ??
+    fields.find((f) => f.schema?.custom?.endsWith(':jsw-story-points'));
+  const sprint = fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-sprint') ?? fields.find((f) => f.name === 'Sprint');
+  return { storyPoints: storyPoints?.id, sprint: sprint?.id };
+}
+
+export interface SprintRef {
+  id: number;
+  name: string;
+  state: 'active' | 'future' | 'closed' | string;
+}
+
+export interface IssueDetail {
+  key: string;
+  summary: string;
+  description: RichDoc | null;
+  /** Jira-rendered HTML for display (sanitise before use). */
+  descriptionHtml: string;
+  status: string;
+  statusCategory: StatusCategory;
+  issueType: { name: string; iconUrl?: string };
+  project: { key: string; name: string };
+  parent: { key: string; summary: string } | null;
+  assignee: Person | null;
+  reporter: Person | null;
+  priority: { id: string; name: string; iconUrl?: string } | null;
+  labels: string[];
+  dueDate: string | null;
+  created: string;
+  updated: string;
+  fixVersions: { id: string; name: string }[];
+  sprints: SprintRef[];
+  /** "3h 30m" strings as Jira formats them, plus seconds. */
+  timetracking: {
+    originalEstimate?: string;
+    remainingEstimate?: string;
+    timeSpent?: string;
+    originalEstimateSeconds?: number;
+    remainingEstimateSeconds?: number;
+    timeSpentSeconds?: number;
+  };
+  storyPoints: number | null;
+  /** Field ids found on this site (null when the field doesn't exist). */
+  fieldIds: { storyPoints: string | null };
+}
+
+const toStatusCategory = (key?: string): StatusCategory =>
+  key === 'new' || key === 'indeterminate' || key === 'done' ? key : 'unknown';
+
+async function issueDetail(c: Credentials, key: string, signal?: AbortSignal): Promise<IssueDetail> {
+  const ids = await agileFieldIds(c);
+  const fields = [
+    'summary', 'description', 'status', 'issuetype', 'project', 'parent', 'assignee', 'reporter', 'priority',
+    'labels', 'duedate', 'created', 'updated', 'fixVersions', 'timetracking',
+    ...(ids.storyPoints ? [ids.storyPoints] : []),
+    ...(ids.sprint ? [ids.sprint] : []),
+  ];
+  const r = await jiraGet<{
+    key: string;
+    fields: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    renderedFields?: { description?: string };
+  }>(c, `/issue/${encodeURIComponent(key)}`, { fields: fields.join(','), expand: 'renderedFields' }, signal);
+  const f = r.fields;
+  return {
+    key: r.key,
+    summary: f.summary,
+    description: f.description ?? null,
+    descriptionHtml: r.renderedFields?.description ?? '',
+    status: f.status?.name,
+    statusCategory: toStatusCategory(f.status?.statusCategory?.key),
+    issueType: { name: f.issuetype?.name, iconUrl: f.issuetype?.iconUrl },
+    project: { key: f.project?.key, name: f.project?.name },
+    parent: f.parent ? { key: f.parent.key, summary: f.parent.fields?.summary ?? '' } : null,
+    assignee: f.assignee ? toPerson(f.assignee) : null,
+    reporter: f.reporter ? toPerson(f.reporter) : null,
+    priority: f.priority ? { id: String(f.priority.id), name: f.priority.name, iconUrl: f.priority.iconUrl } : null,
+    labels: f.labels ?? [],
+    dueDate: f.duedate ?? null,
+    created: f.created,
+    updated: f.updated,
+    fixVersions: (f.fixVersions ?? []).map((v: { id: string; name: string }) => ({ id: String(v.id), name: v.name })),
+    sprints: ids.sprint ? ((f[ids.sprint] as SprintRef[] | null) ?? []).map((s) => ({ id: s.id, name: s.name, state: s.state })) : [],
+    timetracking: f.timetracking ?? {},
+    storyPoints: ids.storyPoints && typeof f[ids.storyPoints] === 'number' ? f[ids.storyPoints] : null,
+    fieldIds: { storyPoints: ids.storyPoints ?? null },
+  };
+}
+
+export interface EditMeta {
+  /** Field ids you may change on this issue. */
+  editable: Set<string>;
+  priorities: { id: string; name: string; iconUrl?: string }[];
+}
+
+async function editMeta(c: Credentials, key: string, signal?: AbortSignal): Promise<EditMeta> {
+  const r = await jiraGet<{
+    fields: Record<string, { allowedValues?: { id: string; name: string; iconUrl?: string }[] }>;
+  }>(c, `/issue/${encodeURIComponent(key)}/editmeta`, {}, signal);
+  return {
+    editable: new Set(Object.keys(r.fields)),
+    priorities: (r.fields.priority?.allowedValues ?? []).map((p) => ({ id: String(p.id), name: p.name, iconUrl: p.iconUrl })),
+  };
+}
+
+/** Update fields on an issue (only send what changed). */
+async function updateIssue(c: Credentials, key: string, fields: Record<string, unknown>): Promise<void> {
+  await jiraRequest(c, 'PUT', `/issue/${encodeURIComponent(key)}`, { data: { fields } });
+}
+
+/* ---------- sprints & backlog (Agile API) ---------- */
+
+export interface SprintSection {
+  id: string;
+  name: string;
+  state: 'active' | 'future' | 'backlog';
+  goal?: string;
+  startDate?: string;
+  endDate?: string;
+  tasks: Task[];
+  /** Sum of story points / original estimates in this section (null if none set). */
+  storyPoints: number | null;
+  estimateSeconds: number;
+}
+
+/** Active and future sprints of a board (empty for boards without sprints, e.g. Kanban). */
+async function boardSprints(c: Credentials, boardId: string, signal?: AbortSignal) {
+  try {
+    const r = await agileGet<{
+      values: { id: number; name: string; state: string; goal?: string; startDate?: string; endDate?: string }[];
+    }>(c, `/board/${encodeURIComponent(boardId)}/sprint`, { state: 'active,future', maxResults: 50 }, signal);
+    return r.values;
+  } catch (e) {
+    // Kanban boards reject the sprint endpoint ("board does not support sprints").
+    if (e instanceof ApiError && e.status === 400) return [];
+    throw e;
+  }
+}
+
+/** Issues of one sprint or the backlog, via the Agile API (paged by startAt, up to `cap`). */
+async function agileIssues(
+  c: Credentials,
+  path: string,
+  jql: string,
+  storyPointsField: string | undefined,
+  signal?: AbortSignal,
+  cap = 500,
+): Promise<{ tasks: Task[]; points: number[]; estimates: number[] }> {
+  const fields = [...TASK_FIELDS, 'timetracking', ...(storyPointsField ? [storyPointsField] : [])];
+  const tasks: Task[] = [];
+  const points: number[] = [];
+  const estimates: number[] = [];
+  for (let startAt = 0; ; ) {
+    const r = await agileGet<{
+      issues: { key: string; fields: Record<string, any> }[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+      total?: number;
+      isLast?: boolean;
+    }>(c, path, { startAt, maxResults: 100, fields: fields.join(','), ...(jql ? { jql } : {}) }, signal);
+    for (const i of r.issues) {
+      const f = i.fields;
+      tasks.push({
+        key: i.key,
+        summary: f.summary,
+        status: f.status?.name,
+        statusCategory: toStatusCategory(f.status?.statusCategory?.key),
+        priority: f.priority?.name ?? null,
+        issueType: f.issuetype?.name,
+        projectKey: f.project?.key,
+        projectName: f.project?.name,
+        updated: f.updated,
+        dueDate: f.duedate ?? null,
+        assignee: f.assignee ? toPerson(f.assignee) : null,
+      });
+      points.push(storyPointsField && typeof f[storyPointsField] === 'number' ? f[storyPointsField] : NaN);
+      estimates.push(f.timetracking?.originalEstimateSeconds ?? 0);
+    }
+    startAt += r.issues.length;
+    if (r.issues.length === 0 || r.isLast || startAt >= (r.total ?? Infinity) || startAt >= cap) break;
+  }
+  return { tasks, points, estimates };
+}
+
+/**
+ * The board's active and future sprints plus its backlog, each with their issues.
+ * `jql` narrows issues (e.g. assignee = currentUser(), text search).
+ */
+async function sprintBoard(c: Credentials, boardId: string, jql: string, signal?: AbortSignal): Promise<SprintSection[]> {
+  const [{ storyPoints }, sprints] = await Promise.all([agileFieldIds(c), boardSprints(c, boardId, signal)]);
+  const b = encodeURIComponent(boardId);
+  const sections = [
+    ...sprints
+      .sort((x, y) => (x.state === y.state ? 0 : x.state === 'active' ? -1 : 1))
+      .map((s) => ({ meta: { id: String(s.id), name: s.name, state: s.state as 'active' | 'future', goal: s.goal, startDate: s.startDate, endDate: s.endDate }, path: `/board/${b}/sprint/${s.id}/issue` })),
+    { meta: { id: 'backlog', name: 'Backlog', state: 'backlog' as const }, path: `/board/${b}/backlog` },
+  ];
+  return Promise.all(
+    sections.map(async ({ meta, path }) => {
+      const { tasks, points, estimates } = await agileIssues(c, path, jql, storyPoints, signal);
+      const known = points.filter((p) => !Number.isNaN(p));
+      return {
+        ...meta,
+        tasks,
+        storyPoints: known.length ? known.reduce((a, b2) => a + b2, 0) : null,
+        estimateSeconds: estimates.reduce((a, b2) => a + b2, 0),
+      };
+    }),
+  );
+}
+
 export interface IssueTypeOption {
   id: string;
   name: string;
@@ -389,7 +635,8 @@ export interface NewIssue {
   projectKey: string;
   issueTypeId: string;
   summary: string;
-  description: string;
+  /** Rich text as ADF; null = no description. */
+  description: RichDoc | null;
   /** accountId; null = unassigned */
   assigneeId: string | null;
 }
@@ -401,7 +648,7 @@ async function createIssue(c: Credentials, n: NewIssue): Promise<{ key: string }
         project: { key: n.projectKey },
         issuetype: { id: n.issueTypeId },
         summary: n.summary.trim(),
-        ...(n.description.trim() ? { description: textToAdf(n.description.trim()) } : {}),
+        ...(n.description ? { description: n.description } : {}),
         ...(n.assigneeId ? { assignee: { accountId: n.assigneeId } } : {}),
       },
     },
@@ -937,6 +1184,10 @@ export const api = {
   searchUsers,
   tasksPage,
   tasksAll,
+  issueDetail,
+  editMeta,
+  updateIssue,
+  sprintBoard,
   transitions,
   transitionIssue,
   issueTypes,

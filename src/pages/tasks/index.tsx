@@ -1,5 +1,15 @@
 import { useState } from 'react';
-import { ChevronLeftIcon, ChevronRightIcon, ListIcon, ListTreeIcon, Loader2Icon, PlusIcon, RefreshCwIcon, SearchIcon } from 'lucide-react';
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ListIcon,
+  ListTreeIcon,
+  Loader2Icon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  SquareKanbanIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,7 +23,8 @@ import { ErrorAlert } from '@/components/error-alert';
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
 import { StatusMenu } from '@/components/status-menu';
-import { api, SHOW_ALL_CAP, type Board, type TaskQuery } from '@/api';
+import { TaskDetailsSheet } from '@/components/task-details-sheet';
+import { api, SHOW_ALL_CAP, taskFilterJql, type Board, type TaskQuery } from '@/api';
 import { formatDay, relativeTime } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
@@ -21,6 +32,7 @@ import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
 import type { StatusCategory, Task, TaskFilter, TaskScope } from '../../../shared/types';
 import { CreateTaskDialog } from './create-task-dialog';
+import { SprintView } from './sprint-view';
 
 const SCOPES: { id: TaskScope; label: string }[] = [
   { id: 'mine', label: 'Assigned to me' },
@@ -43,6 +55,10 @@ export function TasksPage() {
   const size = PAGE_SIZES.includes(Number(get('size'))) ? Number(get('size')) : 25;
   // ?display=all shows every matching task on one page; default is paged.
   const showAll = get('display') === 'all';
+  // ?view=sprints shows the board's sprints and backlog; ?issue=KEY opens the details panel.
+  const view = get('view') === 'sprints' ? 'sprints' : 'list';
+  const openIssue = get('issue') || null;
+  const [sprintReload, setSprintReload] = useState(0);
   const [query, setQuery] = useUrlSearchInput('q');
 
   const [pickedBoard, setPickedBoard] = useState<Board | null>(null);
@@ -61,20 +77,23 @@ export function TasksPage() {
   const current = pager.key === queryKey ? pager : { key: queryKey, tokens: [null], index: 0 };
 
   const paged = useAsync(
-    (s) => (showAll ? Promise.resolve(null) : api.tasksPage(creds, taskQuery, { token: current.tokens[current.index], size }, s)),
-    [creds, queryKey, current.index, showAll],
+    (s) =>
+      showAll || view === 'sprints'
+        ? Promise.resolve(null)
+        : api.tasksPage(creds, taskQuery, { token: current.tokens[current.index], size }, s),
+    [creds, queryKey, current.index, showAll, view],
   );
   // Show all renders rows as each batch of 100 arrives instead of waiting for the whole list.
   const [partial, setPartial] = useState<{ key: string; tasks: Task[]; total: number | null } | null>(null);
   const everything = useAsync(
     (s) => {
-      if (!showAll) return Promise.resolve(null);
+      if (!showAll || view === 'sprints') return Promise.resolve(null);
       setPartial(null); // a new load starts from zero, not from the previous run's rows
       return api.tasksAll(creds, taskQuery, s, (tasks, total) => {
         if (!s.aborted) setPartial({ key: queryKey, tasks, total });
       });
     },
-    [creds, queryKey, showAll],
+    [creds, queryKey, showAll, view],
   );
   const { loading, error, reload } = showAll ? everything : paged;
   const progress = showAll && everything.loading && partial?.key === queryKey ? partial : null;
@@ -103,7 +122,9 @@ export function TasksPage() {
     <>
       <PageHeader
         title="Tasks"
-        description={scope === 'mine' ? 'Issues assigned to you across every project.' : 'All issues you can browse in Jira.'}
+        description={
+          scope === 'mine' ? 'Issues assigned to you across every project.' : 'All issues you can browse in Jira.'
+        }
         badge={board ? `Board: ${board.name}` : undefined}
         actions={
           <Button onClick={() => setCreateOpen(true)}>
@@ -113,16 +134,49 @@ export function TasksPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <ToggleGroup type="single" variant="outline" size="sm" value={scope} onValueChange={(v) => v && set({ scope: v === 'mine' ? null : v })}>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={view}
+          onValueChange={(v) => v && set({ view: v === 'sprints' ? 'sprints' : null })}
+          aria-label="View"
+        >
+          <ToggleGroupItem value="list">
+            <ListIcon /> List
+          </ToggleGroupItem>
+          <ToggleGroupItem value="sprints">
+            <SquareKanbanIcon /> Sprints
+          </ToggleGroupItem>
+        </ToggleGroup>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={scope}
+          onValueChange={(v) => v && set({ scope: v === 'mine' ? null : v })}
+        >
           {SCOPES.map((s) => (
-            <ToggleGroupItem key={s.id} value={s.id}>{s.label}</ToggleGroupItem>
+            <ToggleGroupItem key={s.id} value={s.id}>
+              {s.label}
+            </ToggleGroupItem>
           ))}
         </ToggleGroup>
-        <ToggleGroup type="single" variant="outline" size="sm" value={status} onValueChange={(v) => v && set({ status: v === 'open' ? null : v })}>
-          {STATUSES.map((s) => (
-            <ToggleGroupItem key={s.id} value={s.id}>{s.label}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        {view === 'list' && (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={status}
+            onValueChange={(v) => v && set({ status: v === 'open' ? null : v })}
+          >
+            {STATUSES.map((s) => (
+              <ToggleGroupItem key={s.id} value={s.id}>
+                {s.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
         <BoardPicker
           value={board}
           onChange={(b) => {
@@ -132,157 +186,197 @@ export function TasksPage() {
         />
         <div className="relative min-w-48 flex-1">
           <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search key, title or description…" className="h-7 pl-8" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search key, title or description…"
+            className="h-7 pl-8"
+          />
         </div>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={showAll ? 'all' : 'paged'}
-          onValueChange={(v) => v && set({ display: v === 'all' ? 'all' : null })}
-          aria-label="Display"
-        >
-          <ToggleGroupItem value="paged" aria-label="Paged">
-            <ListIcon /> Paged
-          </ToggleGroupItem>
-          <ToggleGroupItem value="all" aria-label="Show all on one page">
-            <ListTreeIcon /> Show all
-          </ToggleGroupItem>
-        </ToggleGroup>
+        {view === 'list' && (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={showAll ? 'all' : 'paged'}
+            onValueChange={(v) => v && set({ display: v === 'all' ? 'all' : null })}
+            aria-label="Display"
+          >
+            <ToggleGroupItem value="paged" aria-label="Paged">
+              <ListIcon /> Paged
+            </ToggleGroupItem>
+            <ToggleGroupItem value="all" aria-label="Show all on one page">
+              <ListTreeIcon /> Show all
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )}
         <Button
           variant="outline"
           size="sm"
           onClick={() => {
             setOverrides({});
-            reload();
+            if (view === 'sprints') setSprintReload((k) => k + 1);
+            else reload();
           }}
-          disabled={loading}
+          disabled={view === 'list' && loading}
         >
           <RefreshCwIcon className={cn(loading && 'animate-spin')} data-icon="inline-start" /> Refresh
         </Button>
       </div>
 
       {boardReq.error && <ErrorAlert error={boardReq.error} onRetry={boardReq.reload} />}
-      {error && <ErrorAlert error={error} onRetry={reload} />}
+      {view === 'list' && error && <ErrorAlert error={error} onRetry={reload} />}
 
-      <Card className={cn('gap-0 py-0', loading && data && !progress && 'opacity-60 transition-opacity')}>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-4">Key</TableHead>
-              <TableHead>Summary</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Assignee</TableHead>
-              <TableHead>Priority</TableHead>
-              <TableHead>Due</TableHead>
-              <TableHead className="pr-4">Updated</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {!data &&
-              loading &&
-              Array.from({ length: 6 }, (_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={7} className="px-4"><Skeleton className="h-5 w-full" /></TableCell>
-                </TableRow>
-              ))}
-            {rows.map((t) => {
-              const overdue = t.dueDate && t.statusCategory !== 'done' && t.dueDate < today;
-              return (
-                <TableRow key={t.key}>
-                  <TableCell className="pl-4">
-                    <a href={`${creds.site}/browse/${t.key}`} target="_blank" rel="noreferrer" className="font-medium text-link hover:underline">
-                      {t.key}
-                    </a>
-                  </TableCell>
-                  <TableCell className="max-w-md whitespace-normal">
-                    <span className="mr-1.5 text-xs text-muted-foreground">{t.issueType}</span>
-                    {t.summary}
-                    <div className="text-xs text-muted-foreground">{t.projectName}</div>
-                  </TableCell>
-                  <TableCell>
-                    <StatusMenu
-                      issueKey={t.key}
-                      status={t.status}
-                      category={t.statusCategory}
-                      onChanged={(s, c) => setOverrides((o) => ({ ...o, [t.key]: { status: s, statusCategory: c } }))}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    {t.assignee ? (
-                      <span className="flex items-center gap-2">
-                        <PersonAvatar person={t.assignee} />
-                        <span className="max-w-36 truncate">{t.assignee.displayName}</span>
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">Unassigned</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{t.priority ?? '—'}</TableCell>
-                  <TableCell className={cn(overdue ? 'font-medium text-destructive' : 'text-muted-foreground')}>
-                    {t.dueDate ? formatDay(t.dueDate, { weekday: undefined }) : '—'}
-                  </TableCell>
-                  <TableCell className="pr-4 text-muted-foreground">{relativeTime(t.updated)}</TableCell>
-                </TableRow>
-              );
-            })}
-            {data && rows.length === 0 && (
+      {view === 'sprints' ? (
+        <SprintView
+          boardId={boardId}
+          jql={taskFilterJql(scope, get('q'))}
+          onOpen={(key) => set({ issue: key })}
+          reloadKey={sprintReload}
+        />
+      ) : (
+        <Card className={cn('gap-0 py-0', loading && data && !progress && 'opacity-60 transition-opacity')}>
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">No tasks match.</TableCell>
+                <TableHead className="pl-4">Key</TableHead>
+                <TableHead>Summary</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Assignee</TableHead>
+                <TableHead>Priority</TableHead>
+                <TableHead>Due</TableHead>
+                <TableHead className="pr-4">Updated</TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-        {progress && (
-          <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" />
-            <span className="tabular-nums">
-              Loading {progress.tasks.length.toLocaleString()}
-              {progress.total !== null && ` of ~${Math.min(progress.total, SHOW_ALL_CAP).toLocaleString()}`} tasks…
-            </span>
-            <span className="text-xs">(switch to Paged for a faster first page)</span>
-          </div>
-        )}
-        {showAll && !progress && everything.data && rows.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-muted-foreground">
-            <span className="tabular-nums">
-              {everything.data.truncated
-                ? `Showing the first ${rows.length.toLocaleString()}${everything.data.total !== null ? ` of ~${everything.data.total.toLocaleString()}` : ''} tasks. Narrow the filters to see the rest.`
-                : `All ${rows.length.toLocaleString()} tasks`}
-            </span>
-          </div>
-        )}
-        {!showAll && paged.data && (rows.length > 0 || current.index > 0) && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-            <span className="text-sm text-muted-foreground tabular-nums">
-              {rows.length ? `${from}–${from + rows.length - 1}` : '0'}
-              {paged.data.total !== null && ` of ${paged.data.total >= 1000 ? '~' : ''}${paged.data.total.toLocaleString()}`}
-            </span>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                Rows
-                <Select value={String(size)} onValueChange={(v) => set({ size: v === '25' ? null : v })}>
-                  <SelectTrigger size="sm" className="w-18" aria-label="Rows per page">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PAGE_SIZES.map((n) => (
-                      <SelectItem key={n} value={String(n)}>{n}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button variant="outline" size="sm" onClick={goPrev} disabled={current.index === 0 || loading}>
-                <ChevronLeftIcon data-icon="inline-start" /> Previous
-              </Button>
-              <span className="text-sm tabular-nums">Page {current.index + 1}</span>
-              <Button variant="outline" size="sm" onClick={goNext} disabled={!nextToken || loading}>
-                Next <ChevronRightIcon data-icon="inline-end" />
-              </Button>
+            </TableHeader>
+            <TableBody>
+              {!data &&
+                loading &&
+                Array.from({ length: 6 }, (_, i) => (
+                  <TableRow key={i}>
+                    <TableCell colSpan={7} className="px-4">
+                      <Skeleton className="h-5 w-full" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              {rows.map((t) => {
+                const overdue = t.dueDate && t.statusCategory !== 'done' && t.dueDate < today;
+                return (
+                  <TableRow key={t.key} className="cursor-pointer" onClick={() => set({ issue: t.key })}>
+                    <TableCell className="pl-4">
+                      <a
+                        href={`${creds.site}/browse/${t.key}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="font-medium text-link hover:underline"
+                      >
+                        {t.key}
+                      </a>
+                    </TableCell>
+                    <TableCell className="max-w-md whitespace-normal">
+                      <span className="mr-1.5 text-xs text-muted-foreground">{t.issueType}</span>
+                      {t.summary}
+                      <div className="text-xs text-muted-foreground">{t.projectName}</div>
+                    </TableCell>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <StatusMenu
+                        issueKey={t.key}
+                        status={t.status}
+                        category={t.statusCategory}
+                        onChanged={(s, c) => setOverrides((o) => ({ ...o, [t.key]: { status: s, statusCategory: c } }))}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      {t.assignee ? (
+                        <span className="flex items-center gap-2">
+                          <PersonAvatar person={t.assignee} />
+                          <span className="max-w-36 truncate">{t.assignee.displayName}</span>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">Unassigned</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{t.priority ?? '—'}</TableCell>
+                    <TableCell className={cn(overdue ? 'font-medium text-destructive' : 'text-muted-foreground')}>
+                      {t.dueDate ? formatDay(t.dueDate, { weekday: undefined }) : '—'}
+                    </TableCell>
+                    <TableCell className="pr-4 text-muted-foreground">{relativeTime(t.updated)}</TableCell>
+                  </TableRow>
+                );
+              })}
+              {data && rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                    No tasks match.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          {progress && (
+            <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
+              <Loader2Icon className="size-4 animate-spin" />
+              <span className="tabular-nums">
+                Loading {progress.tasks.length.toLocaleString()}
+                {progress.total !== null && ` of ~${Math.min(progress.total, SHOW_ALL_CAP).toLocaleString()}`} tasks…
+              </span>
+              <span className="text-xs">(switch to Paged for a faster first page)</span>
             </div>
-          </div>
-        )}
-      </Card>
+          )}
+          {showAll && !progress && everything.data && rows.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-muted-foreground">
+              <span className="tabular-nums">
+                {everything.data.truncated
+                  ? `Showing the first ${rows.length.toLocaleString()}${everything.data.total !== null ? ` of ~${everything.data.total.toLocaleString()}` : ''} tasks. Narrow the filters to see the rest.`
+                  : `All ${rows.length.toLocaleString()} tasks`}
+              </span>
+            </div>
+          )}
+          {!showAll && paged.data && (rows.length > 0 || current.index > 0) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {rows.length ? `${from}–${from + rows.length - 1}` : '0'}
+                {paged.data.total !== null &&
+                  ` of ${paged.data.total >= 1000 ? '~' : ''}${paged.data.total.toLocaleString()}`}
+              </span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  Rows
+                  <Select value={String(size)} onValueChange={(v) => set({ size: v === '25' ? null : v })}>
+                    <SelectTrigger size="sm" className="w-18" aria-label="Rows per page">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAGE_SIZES.map((n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {n}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button variant="outline" size="sm" onClick={goPrev} disabled={current.index === 0 || loading}>
+                  <ChevronLeftIcon data-icon="inline-start" /> Previous
+                </Button>
+                <span className="text-sm tabular-nums">Page {current.index + 1}</span>
+                <Button variant="outline" size="sm" onClick={goNext} disabled={!nextToken || loading}>
+                  Next <ChevronRightIcon data-icon="inline-end" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <TaskDetailsSheet
+        issueKey={openIssue}
+        onClose={() => set({ issue: null })}
+        onChanged={() => {
+          setOverrides({});
+          if (view === 'sprints') setSprintReload((k) => k + 1);
+          else reload();
+        }}
+      />
 
       <CreateTaskDialog
         open={createOpen}
@@ -291,7 +385,8 @@ export function TasksPage() {
         onCreated={() => {
           setOverrides({});
           setPager({ key: queryKey, tokens: [null], index: 0 });
-          reload();
+          if (view === 'sprints') setSprintReload((k) => k + 1);
+          else reload();
         }}
       />
     </>

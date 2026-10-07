@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { DataPagination } from '@/components/data-pagination';
 import { ErrorAlert } from '@/components/error-alert';
 import { IssueStatusBadge, ReleaseStatusBadge } from '@/components/status-badge';
+import { TaskDetailsSheet } from '@/components/task-details-sheet';
 import { api } from '@/api';
 import { daysFromToday, describeDays, formatDate } from '@/dates';
 import { useSession } from '@/lib/session';
@@ -145,9 +146,15 @@ export function ReleaseDetailPage() {
                 </TableRow>
               ))}
             {slice.map((i) => (
-              <TableRow key={i.key}>
+              <TableRow key={i.key} className="cursor-pointer" onClick={() => set({ issue: i.key })}>
                 <TableCell className="pl-4">
-                  <a href={`${creds.site}/browse/${i.key}`} target="_blank" rel="noreferrer" className="font-medium text-link hover:underline">
+                  <a
+                    href={`${creds.site}/browse/${i.key}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="font-medium text-link hover:underline"
+                  >
                     {i.key}
                   </a>
                 </TableCell>
@@ -181,6 +188,8 @@ export function ReleaseDetailPage() {
           </div>
         )}
       </Card>
+
+      <TaskDetailsSheet issueKey={get('issue') || null} onClose={() => set({ issue: null })} onChanged={issuesReq.reload} />
     </>
   );
 }

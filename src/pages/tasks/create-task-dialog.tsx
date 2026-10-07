@@ -1,21 +1,21 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import { AlertCircleIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon, UserXIcon } from 'lucide-react';
+import type { JSONContent } from '@tiptap/react';
+import { AlertCircleIcon, Loader2Icon } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
-import { PersonAvatar } from '@/components/person-avatar';
+import { AssigneePicker, type Assignee } from '@/components/assignee-picker';
+import { RichTextEditor } from '@/components/rich-text-editor';
 import { api, ApiError } from '@/api';
+import { tiptapToAdf } from '@/lib/adf';
 import { useSession } from '@/lib/session';
-import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
-import type { Person } from '../../../shared/types';
+
+const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
 
 const LAST_PROJECT_KEY = 'jira-dashboard.lastCreateProject';
 const remembered = () => {
@@ -34,15 +34,13 @@ interface Props {
   onCreated: (key: string) => void;
 }
 
-/** Assignee: me (default), unassigned, or anyone assignable in the project. */
-type Assignee = { kind: 'me' } | { kind: 'none' } | { kind: 'user'; person: Person };
 
 export function CreateTaskDialog({ open, onOpenChange, defaultProjectKey, onCreated }: Props) {
   const { creds, me, onUnauthorized } = useSession();
   const [projectKey, setProjectKey] = useState('');
   const [issueTypeId, setIssueTypeId] = useState('');
   const [summary, setSummary] = useState('');
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState<JSONContent>(EMPTY_DOC);
   const [assignee, setAssignee] = useState<Assignee>({ kind: 'me' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -57,7 +55,7 @@ export function CreateTaskDialog({ open, onOpenChange, defaultProjectKey, onCrea
   useEffect(() => {
     if (!open) return;
     setSummary('');
-    setDescription('');
+    setDescription(EMPTY_DOC);
     setAssignee({ kind: 'me' });
     setError('');
     setProjectKey(defaultProjectKey || remembered());
@@ -88,7 +86,7 @@ export function CreateTaskDialog({ open, onOpenChange, defaultProjectKey, onCrea
         projectKey,
         issueTypeId,
         summary,
-        description,
+        description: tiptapToAdf(description),
         assigneeId: assignee.kind === 'me' ? me.accountId : assignee.kind === 'user' ? assignee.person.accountId : null,
       });
       try {
@@ -160,8 +158,8 @@ export function CreateTaskDialog({ open, onOpenChange, defaultProjectKey, onCrea
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="task-description">Description</Label>
-            <Textarea id="task-description" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="Optional details" />
+            <Label>Description</Label>
+            <RichTextEditor content={EMPTY_DOC} onChange={setDescription} placeholder="Optional details" />
           </div>
 
           <div className="grid min-w-0 gap-1.5">
@@ -186,98 +184,5 @@ export function CreateTaskDialog({ open, onOpenChange, defaultProjectKey, onCrea
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function useDebounced<T>(value: T, ms: number) {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(t);
-  }, [value, ms]);
-  return v;
-}
-
-function AssigneePicker({ projectKey, value, onChange }: { projectKey: string; value: Assignee; onChange: (a: Assignee) => void }) {
-  const { creds, me } = useSession();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const q = useDebounced(query.trim(), 300);
-  const { data, loading, error } = useAsync(
-    (s) => (open && projectKey ? api.assignableUsers(creds, projectKey, q, s) : Promise.resolve(null)),
-    [creds, open, projectKey, q],
-  );
-
-  const pick = (a: Assignee) => {
-    onChange(a);
-    setOpen(false);
-    setQuery('');
-  };
-  const people = (data ?? []).filter((p) => p.accountId !== me.accountId);
-  const label =
-    value.kind === 'me' ? (
-      <>
-        <PersonAvatar person={me} className="size-5" /> {me.displayName} (me)
-      </>
-    ) : value.kind === 'none' ? (
-      <>
-        <UserXIcon className="text-muted-foreground" /> Unassigned
-      </>
-    ) : (
-      <>
-        <PersonAvatar person={value.person} className="size-5" /> {value.person.displayName}
-      </>
-    );
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" role="combobox" aria-expanded={open} aria-label="Assignee" className="w-full min-w-0 justify-between font-normal">
-          <span className="flex min-w-0 items-center gap-2 truncate">{label}</span>
-          <ChevronsUpDownIcon className="opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
-        <Command shouldFilter={false}>
-          <CommandInput value={query} onValueChange={setQuery} placeholder="Search assignable people…" />
-          <CommandList>
-            {!q && (
-              <CommandGroup>
-                <CommandItem value="__me" onSelect={() => pick({ kind: 'me' })} className="gap-2">
-                  <PersonAvatar person={me} />
-                  <span className="flex-1">{me.displayName} (me)</span>
-                  <CheckIcon className={cn(value.kind === 'me' ? 'opacity-100' : 'opacity-0')} />
-                </CommandItem>
-                <CommandItem value="__none" onSelect={() => pick({ kind: 'none' })} className="gap-2">
-                  <UserXIcon className="text-muted-foreground" />
-                  <span className="flex-1">Unassigned</span>
-                  <CheckIcon className={cn(value.kind === 'none' ? 'opacity-100' : 'opacity-0')} />
-                </CommandItem>
-              </CommandGroup>
-            )}
-            {loading && !data && (
-              <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
-                <Loader2Icon className="size-4 animate-spin" /> Loading people…
-              </div>
-            )}
-            {error && <div className="p-3 text-sm text-destructive">{error.message}</div>}
-            {data && q && people.length === 0 && <CommandEmpty>No assignable people found.</CommandEmpty>}
-            {people.length > 0 && (
-              <CommandGroup heading="People">
-                {people.map((p) => (
-                  <CommandItem key={p.accountId} value={p.accountId} onSelect={() => pick({ kind: 'user', person: p })} className="gap-2">
-                    <PersonAvatar person={p} />
-                    <span className="min-w-0 flex-1 truncate">{p.displayName}</span>
-                    <CheckIcon
-                      className={cn(value.kind === 'user' && value.person.accountId === p.accountId ? 'opacity-100' : 'opacity-0')}
-                    />
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
   );
 }
