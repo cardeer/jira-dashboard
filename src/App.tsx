@@ -11,7 +11,7 @@ import { LoginPage } from '@/pages/login';
 
 // Route-level code splitting keeps the first load small (charts, calendar etc. load on demand).
 const WorklogsPage = lazy(() => import('@/pages/worklogs').then((m) => ({ default: m.WorklogsPage })));
-const TasksPage = lazy(() => import('@/pages/tasks').then((m) => ({ default: m.TasksPage })));
+const TasksPage = lazy(() => import('@/pages/tasks/index').then((m) => ({ default: m.TasksPage })));
 const ReleasesPage = lazy(() => import('@/pages/releases').then((m) => ({ default: m.ReleasesPage })));
 const ReleaseDetailPage = lazy(() => import('@/pages/release-detail').then((m) => ({ default: m.ReleaseDetailPage })));
 import type { Credentials, Me } from '../shared/types';

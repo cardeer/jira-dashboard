@@ -8,6 +8,7 @@ import type {
   StatusCategory,
   Task,
   TaskFilter,
+  TaskScope,
   WorklogEntry,
   WorklogScope,
 } from '../shared/types';
@@ -172,13 +173,59 @@ async function searchUsers(c: Credentials, query: string, signal?: AbortSignal):
   return users.filter((u) => u.active !== false && (u.accountType ?? 'atlassian') === 'atlassian').map(toPerson);
 }
 
-async function tasks(c: Credentials, filter: TaskFilter, signal?: AbortSignal): Promise<Task[]> {
-  const clause = {
-    open: 'statusCategory != Done',
-    done: 'statusCategory = Done AND updated >= -30d',
-    all: '(statusCategory != Done OR updated >= -30d)',
-  }[filter];
+const STATUS_JQL: Record<TaskFilter, string> = {
+  open: 'statusCategory != Done',
+  done: 'statusCategory = Done AND updated >= -30d',
+  all: '(statusCategory != Done OR updated >= -30d)',
+};
 
+export interface TaskQuery {
+  scope: TaskScope;
+  status: TaskFilter;
+  boardId: string | null;
+  /** Free text: key, summary or description. */
+  text: string;
+}
+
+/** JQL for the Tasks page (board filter resolved to its saved filter). */
+async function taskJql(c: Credentials, q: TaskQuery, signal?: AbortSignal): Promise<{ jql: string; withKey: boolean }> {
+  const parts: string[] = [];
+  if (q.boardId) parts.push(`filter = ${Number(await boardFilterId(c, q.boardId, signal))}`);
+  if (q.scope === 'mine') parts.push('assignee = currentUser()');
+  parts.push(STATUS_JQL[q.status]);
+  const t = q.text.trim().replace(/["\\]/g, ' ').trim();
+  let withKey = false;
+  if (t) {
+    const text = [`text ~ "${t}"`];
+    if (!/\s/.test(t) && t.length >= 2) text.push(`summary ~ "${t}*"`);
+    if (/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(t)) {
+      text.unshift(`key = "${t.toUpperCase()}"`);
+      withKey = true;
+    }
+    parts.push(`(${text.join(' OR ')})`);
+  }
+  return { jql: `${parts.join(' AND ')} ORDER BY updated DESC`, withKey };
+}
+
+export interface TaskPage {
+  tasks: Task[];
+  nextPageToken: string | null;
+  /** Approximate total matching issues (null if Jira couldn't say). */
+  total: number | null;
+}
+
+const TASK_FIELDS = ['summary', 'status', 'priority', 'issuetype', 'project', 'updated', 'duedate', 'assignee'];
+
+/**
+ * One page of tasks. Jira's search pages forward with tokens (no random access), so callers
+ * keep the token for each page they've visited.
+ */
+async function tasksPage(
+  c: Credentials,
+  q: TaskQuery,
+  page: { token: string | null; size: number },
+  signal?: AbortSignal,
+): Promise<TaskPage> {
   interface F {
     summary: string;
     status: { name: string; statusCategory?: { key: string } };
@@ -187,28 +234,143 @@ async function tasks(c: Credentials, filter: TaskFilter, signal?: AbortSignal): 
     project: { key: string; name: string };
     updated: string;
     duedate: string | null;
+    assignee?: RawUser | null;
   }
-  const issues = await searchIssues<F>(
+  interface Res {
+    issues: { key: string; fields: F }[];
+    nextPageToken?: string;
+    isLast?: boolean;
+  }
+  let { jql, withKey } = await taskJql(c, q, signal);
+  const run = (j: string) =>
+    Promise.all([
+      jiraGet<Res>(
+        c,
+        '/search/jql',
+        { jql: j, fields: TASK_FIELDS.join(','), maxResults: page.size, ...(page.token ? { nextPageToken: page.token } : {}) },
+        signal,
+      ),
+      // Totals are a nice-to-have; never fail the page for them.
+      jiraRequest<{ count: number }>(c, 'POST', '/search/approximate-count', { data: { jql: j } }, signal).then(
+        (r) => r.count,
+        () => null,
+      ),
+    ]);
+  let res: Res;
+  let total: number | null;
+  try {
+    [res, total] = await run(jql);
+  } catch (e) {
+    // `key = X` errors when that project/issue doesn't exist: retry as plain text search.
+    if (!withKey || !(e instanceof ApiError) || e.status !== 400) throw e;
+    ({ jql } = await taskJql(c, { ...q, text: q.text.replace(/-/g, ' ') }, signal));
+    [res, total] = await run(jql);
+  }
+  return {
+    tasks: res.issues.map((i) => {
+      const cat = i.fields.status.statusCategory?.key;
+      return {
+        key: i.key,
+        summary: i.fields.summary,
+        status: i.fields.status.name,
+        statusCategory: cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown',
+        priority: i.fields.priority?.name ?? null,
+        issueType: i.fields.issuetype.name,
+        projectKey: i.fields.project.key,
+        projectName: i.fields.project.name,
+        updated: i.fields.updated,
+        dueDate: i.fields.duedate,
+        assignee: i.fields.assignee ? toPerson(i.fields.assignee) : null,
+      };
+    }),
+    nextPageToken: res.isLast ? null : (res.nextPageToken ?? null),
+    total,
+  };
+}
+
+export interface Transition {
+  id: string;
+  name: string;
+  to: { name: string; statusCategory: StatusCategory };
+}
+
+/** Workflow moves available for an issue right now (depends on its current status and your permissions). */
+async function transitions(c: Credentials, issueKey: string, signal?: AbortSignal): Promise<Transition[]> {
+  const res = await jiraGet<{
+    transitions: { id: string; name: string; to: { name: string; statusCategory?: { key: string } } }[];
+  }>(c, `/issue/${encodeURIComponent(issueKey)}/transitions`, {}, signal);
+  return res.transitions.map((t) => {
+    const cat = t.to.statusCategory?.key;
+    return {
+      id: t.id,
+      name: t.name,
+      to: { name: t.to.name, statusCategory: cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown' },
+    };
+  });
+}
+
+async function transitionIssue(c: Credentials, issueKey: string, transitionId: string): Promise<void> {
+  await jiraRequest(c, 'POST', `/issue/${encodeURIComponent(issueKey)}/transitions`, {
+    data: { transition: { id: transitionId } },
+  });
+}
+
+export interface IssueTypeOption {
+  id: string;
+  name: string;
+  iconUrl?: string;
+}
+
+/** Issue types you can create in a project (sub-tasks excluded: they need a parent). */
+async function issueTypes(c: Credentials, projectKey: string, signal?: AbortSignal): Promise<IssueTypeOption[]> {
+  const res = await jiraGet<{ issueTypes?: RawIssueType[]; values?: RawIssueType[] }>(
     c,
-    `assignee = currentUser() AND ${clause} ORDER BY updated DESC`,
-    ['summary', 'status', 'priority', 'issuetype', 'project', 'updated', 'duedate'],
+    `/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`,
+    { maxResults: 50 },
     signal,
   );
-  return issues.map((i) => {
-    const cat = i.fields.status.statusCategory?.key;
-    const statusCategory: StatusCategory = cat === 'new' || cat === 'indeterminate' || cat === 'done' ? cat : 'unknown';
-    return {
-      key: i.key,
-      summary: i.fields.summary,
-      status: i.fields.status.name,
-      statusCategory,
-      priority: i.fields.priority?.name ?? null,
-      issueType: i.fields.issuetype.name,
-      projectKey: i.fields.project.key,
-      projectName: i.fields.project.name,
-      updated: i.fields.updated,
-      dueDate: i.fields.duedate,
-    };
+  return (res.issueTypes ?? res.values ?? [])
+    .filter((t) => !t.subtask)
+    .map((t) => ({ id: String(t.id), name: t.name, iconUrl: t.iconUrl }));
+}
+interface RawIssueType {
+  id: string | number;
+  name: string;
+  subtask?: boolean;
+  iconUrl?: string;
+}
+
+/** People who can be assigned issues in a project. */
+async function assignableUsers(c: Credentials, projectKey: string, query: string, signal?: AbortSignal): Promise<Person[]> {
+  const users = await jiraGet<RawUser[]>(
+    c,
+    '/user/assignable/search',
+    { project: projectKey, maxResults: 20, ...(query.trim() ? { query: query.trim() } : {}) },
+    signal,
+  );
+  return users.filter((u) => u.active !== false && (u.accountType ?? 'atlassian') === 'atlassian').map(toPerson);
+}
+
+export interface NewIssue {
+  projectKey: string;
+  issueTypeId: string;
+  summary: string;
+  description: string;
+  /** accountId; null = unassigned */
+  assigneeId: string | null;
+}
+
+async function createIssue(c: Credentials, n: NewIssue): Promise<{ key: string }> {
+  return jiraRequest<{ key: string }>(c, 'POST', '/issue', {
+    data: {
+      fields: {
+        project: { key: n.projectKey },
+        issuetype: { id: n.issueTypeId },
+        summary: n.summary.trim(),
+        ...(n.description.trim() ? { description: textToAdf(n.description.trim()) } : {}),
+        ...(n.assigneeId ? { assignee: { accountId: n.assigneeId } } : {}),
+      },
+    },
   });
 }
 
@@ -333,6 +495,7 @@ export interface Board {
   type: string;
   /** e.g. "Nipa Cloud Service (NCS)" */
   location?: string;
+  projectKey?: string;
 }
 
 interface RawBoard {
@@ -346,6 +509,7 @@ const toBoard = (b: RawBoard): Board => ({
   name: b.name,
   type: b.type,
   location: b.location?.displayName ?? (b.location?.projectName ? `${b.location.projectName} (${b.location.projectKey})` : undefined),
+  projectKey: b.location?.projectKey,
 });
 
 /** Boards you can see, optionally matching a name (Jira Software Agile API). */
@@ -713,7 +877,12 @@ export const api = {
   boards,
   board,
   searchUsers,
-  tasks,
+  tasksPage,
+  transitions,
+  transitionIssue,
+  issueTypes,
+  assignableUsers,
+  createIssue,
   worklogs,
   projects,
   releasePage,

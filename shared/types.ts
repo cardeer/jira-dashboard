@@ -28,7 +28,10 @@ export interface Task {
   projectName: string;
   updated: string;
   dueDate: string | null;
+  assignee: { accountId: string; displayName: string; avatarUrl?: string } | null;
 }
+
+export type TaskScope = 'mine' | 'all';
 
 export interface WorklogEntry {
   id: string;

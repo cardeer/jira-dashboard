@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 
 const NAV = [
   { to: '/worklogs', label: 'Work logs', icon: CalendarClockIcon },
-  { to: '/tasks', label: 'My tasks', icon: ClipboardListIcon },
+  { to: '/tasks', label: 'Tasks', icon: ClipboardListIcon },
   { to: '/releases', label: 'Releases', icon: RocketIcon },
 ];
 
