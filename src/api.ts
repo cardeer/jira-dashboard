@@ -561,19 +561,43 @@ async function board(c: Credentials, boardId: string, signal?: AbortSignal): Pro
   return toBoard(await agileGet<RawBoard>(c, `/board/${encodeURIComponent(boardId)}`, {}, signal));
 }
 
-/** The saved filter behind a board. Cached: it rarely changes. */
+/**
+ * The saved filter behind a board. Cached: it rarely changes.
+ * The shared request deliberately ignores callers' AbortSignals: if the first caller is cancelled
+ * (e.g. React StrictMode's double mount, or a quick filter change), later callers reuse the same
+ * promise and must not receive that caller's AbortError. Each caller can still stop waiting.
+ */
 const boardFilterCache = new Map<string, Promise<string>>();
 function boardFilterId(c: Credentials, boardId: string, signal?: AbortSignal): Promise<string> {
   const id = `${c.site}|${boardId}`;
   let p = boardFilterCache.get(id);
   if (!p) {
-    p = agileGet<{ filter: { id: string | number } }>(c, `/board/${encodeURIComponent(boardId)}/configuration`, {}, signal).then(
+    p = agileGet<{ filter: { id: string | number } }>(c, `/board/${encodeURIComponent(boardId)}/configuration`).then(
       (cfg) => String(cfg.filter.id),
     );
     p.catch(() => boardFilterCache.delete(id));
     boardFilterCache.set(id, p);
   }
-  return p;
+  return signal ? raceAbort(p, signal) : p;
+}
+
+/** Resolve like `p`, but reject with AbortError as soon as `signal` aborts (without cancelling `p`). */
+function raceAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
 }
 
 export interface ProjectRef {

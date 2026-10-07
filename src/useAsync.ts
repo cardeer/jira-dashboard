@@ -18,7 +18,9 @@ export function useAsync<T>(fn: (signal: AbortSignal) => Promise<T>, deps: unkno
     fn(ctrl.signal).then(
       (data) => setState({ data, loading: false, error: null }),
       (e: unknown) => {
-        if ((e as Error).name === 'AbortError') return;
+        // Only our own cancellation is expected; anything else (even an AbortError from a shared
+        // request someone else cancelled) must surface instead of leaving the UI loading forever.
+        if ((e as Error).name === 'AbortError' && ctrl.signal.aborted) return;
         setState({ data: null, loading: false, error: e instanceof ApiError ? e : new ApiError(0, String(e)) });
       },
     );
