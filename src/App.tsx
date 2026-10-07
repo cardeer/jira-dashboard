@@ -1,5 +1,5 @@
-import { lazy, useCallback, useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes } from 'react-router';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { Loader2Icon } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -14,9 +14,34 @@ const WorklogsPage = lazy(() => import('@/pages/worklogs').then((m) => ({ defaul
 const TasksPage = lazy(() => import('@/pages/tasks/index').then((m) => ({ default: m.TasksPage })));
 const ReleasesPage = lazy(() => import('@/pages/releases').then((m) => ({ default: m.ReleasesPage })));
 const ReleaseDetailPage = lazy(() => import('@/pages/release-detail').then((m) => ({ default: m.ReleaseDetailPage })));
+const PlanLobbyPage = lazy(() => import('@/pages/plan/index').then((m) => ({ default: m.PlanLobbyPage })));
+const PlanRoomPage = lazy(() => import('@/pages/plan/room').then((m) => ({ default: m.PlanRoomPage })));
 import type { Credentials, Me } from '../shared/types';
 
 export default function App() {
+  // Planning poker is public: it talks to peers directly and never touches Jira.
+  const { pathname } = useLocation();
+  if (pathname === '/plan' || pathname.startsWith('/plan/')) {
+    return (
+      <Suspense
+        fallback={
+          <main className="grid min-h-svh place-items-center">
+            <Loader2Icon className="size-5 animate-spin text-muted-foreground" />
+          </main>
+        }
+      >
+        <Routes>
+          <Route path="plan" element={<PlanLobbyPage />} />
+          <Route path="plan/:roomId" element={<PlanRoomPage />} />
+          <Route path="*" element={<Navigate to="/plan" replace />} />
+        </Routes>
+      </Suspense>
+    );
+  }
+  return <AuthedApp />;
+}
+
+function AuthedApp() {
   const [creds, setCreds] = useState<Credentials | null>(() => loadCredentials());
   const [me, setMe] = useState<Me | null>(null);
   const [loginError, setLoginError] = useState('');
