@@ -44,6 +44,9 @@ export type SeatReaction = { key: ReactionKey; n: number };
 export type Poke = { from: string; fromName: string; n: number };
 
 type PokeMsg = { to: string; fromName: string };
+type ThrowMsg = { to: string; fromName: string };
+/** A tomato in flight from one seat to another. */
+export type Throw = { from: string; to: string; fromName: string; n: number };
 type ReactMsg = { key: ReactionKey };
 
 let fxCounter = 0;
@@ -86,6 +89,7 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
   const [poked, setPoked] = useState<Record<string, number>>({});
   /** Set when someone pokes me. */
   const [incomingPoke, setIncomingPoke] = useState<Poke | null>(null);
+  const [throws, setThrows] = useState<Throw[]>([]);
 
   const meRef = useRef(me);
   meRef.current = me;
@@ -96,6 +100,7 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     room: (r: RoomState) => void;
     poke: (p: PokeMsg) => void;
     react: (r: ReactMsg) => void;
+    throw: (t: ThrowMsg) => void;
   } | null>(null);
 
   const showReaction = useCallback((seat: string, key: ReactionKey) => {
@@ -105,6 +110,11 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
   const showPoke = useCallback((from: string, msg: PokeMsg) => {
     setPoked((p) => ({ ...p, [msg.to]: ++fxCounter }));
     if (msg.to === selfId) setIncomingPoke({ from, fromName: String(msg.fromName).slice(0, 30), n: fxCounter });
+  }, []);
+  const showThrow = useCallback((from: string, msg: ThrowMsg) => {
+    if (typeof msg.to !== 'string') return;
+    // Cap what's in the air so a spammer can't flood the screen.
+    setThrows((t) => [...t.slice(-7), { from, to: msg.to, fromName: String(msg.fromName).slice(0, 30), n: ++fxCounter }]);
   }, []);
 
   const applyRoom = useCallback((next: RoomState) => {
@@ -125,11 +135,13 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     // Pokes go to everyone so all seats can show the jab; only the target gets the alert.
     const pokeAction = r.makeAction<PokeMsg>('poke');
     const reactAction = r.makeAction<ReactMsg>('react');
+    const throwAction = r.makeAction<ThrowMsg>('throw');
     sendRef.current = {
       member: (m) => void memberAction.send(m),
       room: (s) => void roomAction.send(s),
       poke: (p) => void pokeAction.send(p),
       react: (x) => void reactAction.send(x),
+      throw: (t) => void throwAction.send(t),
     };
 
     r.onPeerJoin = (id) => {
@@ -145,13 +157,14 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     roomAction.onMessage = (s) => void applyRoom(s);
     pokeAction.onMessage = (m, { peerId }) => showPoke(peerId, m);
     reactAction.onMessage = (m, { peerId }) => showReaction(peerId, m.key);
+    throwAction.onMessage = (m, { peerId }) => showThrow(peerId, m);
 
     return () => {
       sendRef.current = null;
       void r.leave();
       setPeers({});
     };
-  }, [roomId, applyRoom, showPoke, showReaction]);
+  }, [roomId, applyRoom, showPoke, showReaction, showThrow]);
 
   // Tell everyone whenever my seat changes.
   useEffect(() => {
@@ -199,6 +212,15 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     [showReaction],
   );
   const dismissPoke = useCallback(() => setIncomingPoke(null), []);
+  const throwTomato = useCallback(
+    (to: string) => {
+      const msg = { to, fromName: meRef.current.name };
+      showThrow(selfId, msg);
+      sendRef.current?.throw(msg);
+    },
+    [showThrow],
+  );
+  const landThrow = useCallback((n: number) => setThrows((t) => t.filter((x) => x.n !== n)), []);
 
   return {
     selfId,
@@ -210,6 +232,7 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     reactions,
     poked,
     incomingPoke,
+    throws,
     updateRoom,
     setVote,
     setName,
@@ -217,5 +240,7 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     poke,
     react,
     dismissPoke,
+    throwTomato,
+    landThrow,
   };
 }

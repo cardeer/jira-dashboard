@@ -12,28 +12,51 @@ import {
   RotateCcwIcon,
   SparklesIcon,
   SpadeIcon,
-  TargetIcon,
   UsersIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ModeToggle } from '@/components/mode-toggle';
 import { cn } from '@/lib/utils';
 import { BowShooter } from './bow-shooter';
+import { Bowling } from './games/bowling';
+import { Cannon } from './games/cannon';
+import { Golf } from './games/golf';
+import { Rocket } from './games/rocket';
+import type { GameProps } from './games/kit';
 import { GachaReveal, type RevealedVote } from './gacha-reveal';
 import { PickBurst } from './pick-burst';
 import { PokeAlert } from './poke-alert';
+import { SplatBlob, TomatoLayer, TomatoScreen } from './tomato';
 import { roomLink } from './index';
 import { formatNumber, isNumeric, numericScale, tryParsePoints, voteStats } from './points';
-import { REACTIONS, usePlanRoom, type Member, type ReactionKey, type RoomConfig, type SeatReaction } from './use-plan-room';
+import { REACTIONS, usePlanRoom, type Member, type ReactionKey, type RoomConfig, type SeatReaction, type Throw } from './use-plan-room';
 import './plan.css';
 
 const NAME_KEY = 'plan.name';
 const MODE_KEY = 'plan.pickMode';
+
+const PICK_MODES = [
+  { key: 'cards', emoji: '🃏', label: 'Cards' },
+  { key: 'bow', emoji: '🏹', label: 'Bow' },
+  { key: 'cannon', emoji: '💣', label: 'Cannon' },
+  { key: 'bowling', emoji: '🎳', label: 'Bowling' },
+  { key: 'golf', emoji: '⛳', label: 'Golf' },
+  { key: 'rocket', emoji: '🚀', label: 'Rocket' },
+] as const;
+type PickMode = (typeof PICK_MODES)[number]['key'];
+
+const GAMES: Record<Exclude<PickMode, 'cards'>, (props: GameProps) => React.ReactNode> = {
+  bow: BowShooter,
+  cannon: Cannon,
+  bowling: Bowling,
+  golf: Golf,
+  rocket: Rocket,
+};
 
 function readStored(key: string) {
   try {
@@ -146,6 +169,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     reactions,
     poked,
     incomingPoke,
+    throws,
     updateRoom,
     setVote,
     setName,
@@ -153,6 +177,8 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     poke,
     react,
     dismissPoke,
+    throwTomato,
+    landThrow,
   } = usePlanRoom(
     roomId,
     name,
@@ -160,7 +186,10 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
   );
   const [renaming, setRenaming] = useState(false);
   const [showReveal, setShowReveal] = useState(false);
-  const [mode, setMode] = useState(() => (readStored(MODE_KEY) === 'bow' ? 'bow' : 'cards'));
+  const [mode, setMode] = useState<PickMode>(() => {
+    const stored = readStored(MODE_KEY);
+    return PICK_MODES.find((m) => m.key === stored)?.key ?? 'cards';
+  });
   // Light client-side throttles so nobody can spam pokes or reactions.
   const lastPoke = useRef<Record<string, number>>({});
   const [reactCooldown, setReactCooldown] = useState(false);
@@ -172,6 +201,23 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     }
     lastPoke.current[id] = now;
     poke(id);
+  };
+  const lastThrow = useRef(0);
+  const tomatoSeat = (id: string) => {
+    const now = Date.now();
+    if (now - lastThrow.current < 1500) return;
+    lastThrow.current = now;
+    throwTomato(id);
+  };
+  // Splats stuck on seats (seat id -> splat id), and the big one when I'm the target.
+  const [splats, setSplats] = useState<Record<string, number>>({});
+  const [hitMe, setHitMe] = useState<{ fromName: string; n: number } | null>(null);
+  const onTomatoLand = (t: Throw) => {
+    landThrow(t.n);
+    if (!document.querySelector(`[data-seat="${CSS.escape(t.to)}"]`)) return;
+    setSplats((x) => ({ ...x, [t.to]: t.n }));
+    setTimeout(() => setSplats((x) => (x[t.to] === t.n ? (({ [t.to]: _gone, ...rest }) => rest)(x) : x)), 4600);
+    if (t.to === selfId) setHitMe({ fromName: t.fromName, n: t.n });
   };
   const sendReaction = (key: ReactionKey) => {
     if (reactCooldown) return;
@@ -233,7 +279,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     const i = scale.indexOf(v);
     return i < 0 ? 0.4 : scale.length > 1 ? i / (scale.length - 1) : 0.5;
   };
-  const setPickMode = (m: string) => {
+  const setPickMode = (m: PickMode) => {
     setMode(m);
     store(MODE_KEY, m);
   };
@@ -311,14 +357,17 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
               {seats.map((s) => {
                 const v = voteOf(s);
                 return (
-                  <li key={s.id} className="relative flex w-28 flex-col items-center gap-1.5">
+                  <li key={s.id} data-seat={s.id} className="relative flex w-28 flex-col items-center gap-1.5">
                     {reactions[s.id] && <ReactionBubble reaction={reactions[s.id]} />}
-                    <PokeTarget
-                      n={poked[s.id]}
-                      label={s.self ? undefined : `Poke ${s.name}`}
+                    <SeatActions
+                      name={s.name}
+                      poked={poked[s.id]}
+                      splat={splats[s.id]}
                       onPoke={s.self ? undefined : () => pokeSeat(s.id, s.name)}
+                      onTomato={s.self ? undefined : () => tomatoSeat(s.id)}
                     >
                     <div
+                      data-seat-card
                       key={v === null ? 'empty' : room.revealed ? 'up' : `down-${s.picks ?? 0}`}
                       className={cn(
                         'relative flex h-24 w-16 items-center justify-center rounded-lg border-2 text-xl font-bold transition-all',
@@ -333,7 +382,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                       {/* Fixed intensity: the burst must not hint at the hidden value. */}
                       {v !== null && !room.revealed && (s.picks ?? 0) > 0 && <PickBurst intensity={0.5} />}
                     </div>
-                    </PokeTarget>
+                    </SeatActions>
                     <div className="flex w-full items-start justify-center gap-1 text-xs leading-snug">
                       {s.host && <CrownIcon className="mt-0.5 size-3 shrink-0 text-amber-500" aria-label="Host" />}
                       <span className={cn('min-w-0 text-center break-words', s.self && 'font-semibold')} title={s.name}>
@@ -362,7 +411,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them.</p>
+            <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them or throw a 🍅.</p>
             {room.revealed && revealed.length > 0 && (
               <RevealSummary votes={revealed} points={points} onReplay={() => setShowReveal(true)} />
             )}
@@ -374,18 +423,25 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
             <CardTitle className="text-base">
               Your pick{myVote !== null && <span className="ml-2 text-primary">{myVote}</span>}
             </CardTitle>
-            <Tabs value={mode} onValueChange={setPickMode}>
-              <TabsList>
-                <TabsTrigger value="cards">
-                  <SpadeIcon /> Cards
-                </TabsTrigger>
-                <TabsTrigger value="bow">
-                  <TargetIcon /> Bow
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
           </CardHeader>
           <CardContent className="grid gap-3">
+            <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="How to pick">
+              {PICK_MODES.map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === m.key}
+                  onClick={() => setPickMode(m.key)}
+                  className={cn(
+                    'flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent',
+                    mode === m.key && 'border-primary bg-primary text-primary-foreground hover:bg-primary',
+                  )}
+                >
+                  <span aria-hidden>{m.emoji}</span> {m.label}
+                </button>
+              ))}
+            </div>
             {locked && room.config && (
               <p className="text-sm text-muted-foreground">Points are showing — picks are locked until the host starts a new round.</p>
             )}
@@ -412,10 +468,13 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                 ))}
               </div>
             )}
-            {room.config && mode === 'bow' && (
+            {room.config && mode !== 'cards' && (
               <>
                 {scale.length ? (
-                  <BowShooter scale={scale} selected={myVote} disabled={locked} round={room.round} onPick={(v) => setVote(v)} />
+                  (() => {
+                    const Game = GAMES[mode];
+                    return <Game key={mode} scale={scale} selected={myVote} disabled={locked} round={room.round} onPick={(v) => setVote(v)} />;
+                  })()
                 ) : (
                   <p className="text-sm text-muted-foreground">This room has no numeric points to aim at — use the cards.</p>
                 )}
@@ -452,6 +511,8 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
         }}
       />
 
+      <TomatoLayer throws={throws} onLand={onTomatoLand} />
+      {hitMe && <TomatoScreen key={hitMe.n} fromName={hitMe.fromName} n={hitMe.n} onDone={() => setHitMe(null)} />}
       {incomingPoke && <PokeAlert key={incomingPoke.n} fromName={incomingPoke.fromName} onClose={dismissPoke} />}
 
       {showReveal && room.revealed && revealed.length > 0 && (
@@ -499,12 +560,31 @@ function RevealSummary({ votes, points, onReplay }: { votes: RevealedVote[]; poi
   );
 }
 
-/** Wraps a seat card: other people's seats are pokeable, and every view shows the jab when `n` changes. */
-function PokeTarget({ n, label, onPoke, children }: { n?: number; label?: string; onPoke?: () => void; children: ReactNode }) {
+/**
+ * Wraps a seat card. Other people's seats open a menu (poke / tomato). Every view shows the
+ * poke jab when `poked` changes, the splat when `splat` changes, and wobbles the card for both.
+ */
+function SeatActions({
+  name,
+  poked,
+  splat,
+  onPoke,
+  onTomato,
+  children,
+}: {
+  name: string;
+  poked?: number;
+  splat?: number;
+  onPoke?: () => void;
+  onTomato?: () => void;
+  children: ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  const first = useRef(n);
+  const firstPoke = useRef(poked);
+  const hitKey = `${poked ?? ''}:${splat ?? ''}`;
+  const firstHit = useRef(hitKey);
   useEffect(() => {
-    if (n === undefined || n === first.current) return;
+    if (hitKey === firstHit.current) return;
     ref.current?.animate(
       [
         { transform: 'translateX(0) rotate(0)' },
@@ -513,31 +593,53 @@ function PokeTarget({ n, label, onPoke, children }: { n?: number; label?: string
         { transform: 'translateX(4px) rotate(2deg)' },
         { transform: 'translateX(0) rotate(0)' },
       ],
-      { duration: 450, delay: 200, easing: 'ease-out' },
+      { duration: 450, delay: 120, easing: 'ease-out' },
     );
-  }, [n]);
-  const finger = n !== undefined && n !== first.current && (
-    <span key={n} className="seat-poke-finger" aria-hidden>
-      👉
-    </span>
+  }, [hitKey]);
+  const extras = (
+    <>
+      {poked !== undefined && poked !== firstPoke.current && (
+        <span key={`p${poked}`} className="seat-poke-finger" aria-hidden>
+          👉
+        </span>
+      )}
+      {splat !== undefined && (
+        <span key={`s${splat}`} className="seat-splat" aria-hidden>
+          <SplatBlob seed={splat} className="size-full" />
+        </span>
+      )}
+    </>
   );
-  if (!onPoke) {
+  if (!onPoke || !onTomato) {
     return (
       <div ref={ref} className="relative">
         {children}
-        {finger}
+        {extras}
       </div>
     );
   }
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={onPoke} title={label} aria-label={label} className="group relative block rounded-lg">
-        {children}
-        <span className="pointer-events-none absolute inset-x-0 -bottom-2 mx-auto w-max rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-bold text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-          👉 Poke
-        </span>
-      </button>
-      {finger}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button type="button" aria-label={`Poke or throw a tomato at ${name}`} className="group relative block rounded-lg">
+            {children}
+            <span className="pointer-events-none absolute inset-x-0 -bottom-2 mx-auto w-max rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-bold text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              👉 / 🍅
+            </span>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="center" className="min-w-40">
+          <DropdownMenuLabel className="max-w-48 truncate">{name}</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={onPoke}>
+            <span aria-hidden>👉</span> Poke
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onTomato}>
+            <span aria-hidden>🍅</span> Throw a tomato
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {extras}
     </div>
   );
 }
