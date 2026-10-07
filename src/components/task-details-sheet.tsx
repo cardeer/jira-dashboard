@@ -30,7 +30,7 @@ import { RichTextEditor } from '@/components/rich-text-editor';
 import { StatusMenu } from '@/components/status-menu';
 import { api, ApiError, type EditMeta, type IssueDetail, type Transition } from '@/api';
 import { formatDate, formatDuration, fromISO, relativeTime, toISO } from '@/dates';
-import { adfIsEditable, adfToTiptap, tiptapToAdf } from '@/lib/adf';
+import { adfHasOpaqueContent, adfToTiptap, tiptapToAdf } from '@/lib/adf';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
@@ -137,6 +137,8 @@ function Details({
   const d = detail.data;
   const can = (field: string) => Boolean(meta.data?.editable.has(field));
 
+  // The editor's starting document: build it once per loaded description, not on every render.
+  const initialDescription = useMemo(() => adfToTiptap(detail.data?.description ?? null), [detail.data?.description]);
   const [draft, setDraft] = useState<Draft>({});
   const [saving, setSaving] = useState(false);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -177,7 +179,7 @@ function Details({
     assignee: toAssignee(d, me.accountId),
     estimate: Math.round((d.timetracking.originalEstimateSeconds ?? 0) / 60),
     remaining: Math.round((d.timetracking.remainingEstimateSeconds ?? 0) / 60),
-    description: adfToTiptap(d.description),
+    description: initialDescription,
   };
   const v = {
     summary: draft.summary ?? d.summary,
@@ -749,7 +751,9 @@ function DescriptionSection({
 }) {
   const html = useMemo(() => cleanHtml(detail.descriptionHtml, site), [detail.descriptionHtml, site]);
   // Editing content the editor can't represent (images, tables, mentions…) would drop it.
-  const safeToEdit = adfIsEditable(detail.description);
+  // Content the editor can't change (images, tables, mentions…) shows as placeholders and is kept as-is.
+  const hasPlaceholders = adfHasOpaqueContent(detail.description);
+  const jiraUrl = `${site}/browse/${detail.key}`;
 
   return (
     <section className="p-5">
@@ -758,26 +762,26 @@ function DescriptionSection({
           Description
           {changed && <span className="size-1.5 rounded-full bg-primary" aria-label="changed" />}
         </h3>
-        {editable && !editing && safeToEdit && (
+        {editable && !editing && (
           <Button variant="ghost" size="sm" onClick={onStartEditing}>
             <PencilIcon data-icon="inline-start" /> Edit
           </Button>
         )}
-        {editable && !safeToEdit && (
-          <Button variant="ghost" size="sm" asChild>
-            <a
-              href={`${site}/browse/${detail.key}`}
-              target="_blank"
-              rel="noreferrer"
-              title="Contains images, tables or other content this editor can't change safely"
-            >
-              Edit in Jira <ExternalLinkIcon data-icon="inline-end" />
-            </a>
-          </Button>
-        )}
       </div>
       {editing ? (
-        <RichTextEditor content={initial} onChange={onChange} autoFocus />
+        <div className="grid gap-1.5">
+          <RichTextEditor content={initial} onChange={onChange} autoFocus />
+          {hasPlaceholders && (
+            <p className="text-xs text-muted-foreground">
+              Images, tables, mentions and other Jira-only content appear as grey placeholders and are saved unchanged. To
+              edit those parts,{' '}
+              <a href={jiraUrl} target="_blank" rel="noreferrer" className="text-link underline-offset-2 hover:underline">
+                open the issue in Jira
+              </a>
+              .
+            </p>
+          )}
+        </div>
       ) : html ? (
         <div className="jira-prose text-sm" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (

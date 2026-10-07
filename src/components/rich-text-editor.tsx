@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState, type Editor, type JSONContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Placeholder } from '@tiptap/extensions';
+import { AdfBlock, AdfInline, AdfMarks } from '@/components/adf-extensions';
 import {
   BoldIcon,
   CodeIcon,
@@ -43,6 +44,10 @@ export function RichTextEditor({ content, onChange, placeholder = 'Add a descrip
         link: { openOnClick: false, autolink: true, defaultProtocol: 'https' },
       }),
       Placeholder.configure({ placeholder }),
+      // Carry Jira content the editor can't edit through untouched (see lib/adf.ts).
+      AdfInline,
+      AdfBlock,
+      AdfMarks,
     ],
     content,
     autofocus: autoFocus ? 'end' : false,
@@ -54,11 +59,17 @@ export function RichTextEditor({ content, onChange, placeholder = 'Add a descrip
     onUpdate: ({ editor: e }) => onChange(e.getJSON()),
   });
 
-  // Reset when the caller provides a different document (e.g. the dialog reopened).
+  // Reset only when the caller provides a document with different *content* (e.g. another issue).
+  // Comparing by value matters: parents re-render on every keystroke and may pass an equal but new
+  // object, which must not wipe what the user is typing.
+  const contentKey = JSON.stringify(content);
+  const lastKey = useRef(contentKey);
   useEffect(() => {
-    if (editor && JSON.stringify(editor.getJSON()) !== JSON.stringify(content)) editor.commands.setContent(content);
+    if (!editor || contentKey === lastKey.current) return;
+    lastKey.current = contentKey;
+    editor.commands.setContent(content);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content]);
+  }, [editor, contentKey]);
 
   return (
     <div

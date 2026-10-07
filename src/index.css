@@ -157,3 +157,18 @@
 .jira-prose p.is-editor-empty:first-child::before {
     content: attr(data-placeholder); color: var(--muted-foreground); float: left; height: 0; pointer-events: none;
 }
+
+/* Jira content carried through the editor untouched (mentions, images, tables…). */
+.jira-prose .adf-chip {
+    display: inline-block; padding: 0 0.4em; border-radius: 4px; background: var(--accent); color: var(--accent-foreground);
+    font-size: 0.9em; line-height: 1.5; user-select: none; cursor: default;
+}
+.jira-prose .adf-block {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.25em 1em;
+    padding: 0.5em 0.75em; border: 1px dashed var(--border); border-radius: 6px; background: var(--muted);
+    user-select: none; cursor: grab;
+}
+.jira-prose .adf-block-label { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jira-prose .adf-block-hint { color: var(--muted-foreground); font-size: 0.8em; }
+.jira-prose .ProseMirror-selectednode.adf-chip,
+.jira-prose .ProseMirror-selectednode.adf-block { outline: 2px solid var(--ring); }
