@@ -1,16 +1,10 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowRightIcon, ChevronDownIcon, Loader2Icon } from 'lucide-react';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { ChevronDownIcon, Loader2Icon } from 'lucide-react';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IssueStatusBadge } from '@/components/status-badge';
-import { api, ApiError } from '@/api';
+import { api, ApiError, type Transition } from '@/api';
 import { useSession } from '@/lib/session';
 import { useAsync } from '@/useAsync';
 import type { StatusCategory } from '../../shared/types';
@@ -23,7 +17,16 @@ interface Props {
   onChanged: (status: string, category: StatusCategory) => void;
 }
 
-/** Status badge that opens the issue's available workflow transitions. */
+const GROUPS: { category: StatusCategory; label: string }[] = [
+  { category: 'new', label: 'To do' },
+  { category: 'indeterminate', label: 'In progress' },
+  { category: 'done', label: 'Done' },
+  { category: 'unknown', label: 'Other' },
+];
+/** Show a search box only when the workflow offers enough moves to need one. */
+const SEARCH_THRESHOLD = 7;
+
+/** Status badge that opens the issue's available workflow transitions, grouped and searchable. */
 export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
   const { creds, onUnauthorized } = useSession();
   const [open, setOpen] = useState(false);
@@ -34,12 +37,13 @@ export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
     [creds, issueKey, open, status],
   );
 
-  async function move(id: string, to: { name: string; statusCategory: StatusCategory }) {
+  async function move(t: Transition) {
+    setOpen(false);
     setBusy(true);
     try {
-      await api.transitionIssue(creds, issueKey, id);
-      onChanged(to.name, to.statusCategory);
-      toast.success(`${issueKey} → ${to.name}`);
+      await api.transitionIssue(creds, issueKey, t.id);
+      onChanged(t.to.name, t.to.statusCategory);
+      toast.success(`${issueKey} → ${t.to.name}`);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) onUnauthorized();
       toast.error(`Couldn’t move ${issueKey}`, {
@@ -52,42 +56,65 @@ export function StatusMenu({ issueKey, status, category, onChanged }: Props) {
     }
   }
 
+  const grouped = GROUPS.map((g) => ({
+    ...g,
+    items: (data ?? [])
+      .filter((t) => t.to.statusCategory === g.category)
+      .sort((a, b) => a.to.name.localeCompare(b.to.name) || a.name.localeCompare(b.name)),
+  })).filter((g) => g.items.length > 0);
+
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger
-        className="inline-flex items-center gap-0.5 rounded-4xl outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        className="inline-flex max-w-full items-center gap-0.5 rounded-4xl outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
         disabled={busy}
         aria-label={`Status: ${status}. Change status`}
       >
         <IssueStatusBadge status={status} category={category} />
-        {busy ? <Loader2Icon className="size-3.5 animate-spin text-muted-foreground" /> : <ChevronDownIcon className="size-3.5 text-muted-foreground" />}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-52">
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Move {issueKey} to…</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {loading && !data && (
-          <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" /> Loading…
-          </div>
+        {busy ? (
+          <Loader2Icon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+        ) : (
+          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
         )}
-        {error && <div className="px-2 py-1.5 text-sm text-destructive">{error.message}</div>}
-        {data?.length === 0 && <div className="px-2 py-1.5 text-sm text-muted-foreground">No transitions available.</div>}
-        {data?.map((t) => (
-          <DropdownMenuItem key={t.id} onSelect={() => move(t.id, t.to)} className="justify-between gap-3">
-            {t.name !== t.to.name ? (
-              <>
-                <span>{t.name}</span>
-                <span className="flex items-center gap-1">
-                  <ArrowRightIcon className="size-3 text-muted-foreground" />
-                  <IssueStatusBadge status={t.to.name} category={t.to.statusCategory} />
-                </span>
-              </>
-            ) : (
-              <IssueStatusBadge status={t.to.name} category={t.to.statusCategory} />
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="start">
+        <Command>
+          <div className="flex items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
+            <span className="shrink-0">Move {issueKey} from</span>
+            <IssueStatusBadge status={status} category={category} className="min-w-0" />
+          </div>
+          {data && data.length >= SEARCH_THRESHOLD && <CommandInput placeholder="Search statuses…" />}
+          <CommandList className="max-h-80">
+            {loading && !data && (
+              <div className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                <Loader2Icon className="size-4 animate-spin" /> Loading transitions…
+              </div>
             )}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+            {error && <div className="p-3 text-sm text-destructive">{error.message}</div>}
+            {data && <CommandEmpty>{data.length ? 'No matching status.' : 'No transitions available.'}</CommandEmpty>}
+            {grouped.map((g) => (
+              <CommandGroup key={g.category} heading={g.label}>
+                {g.items.map((t) => (
+                  <CommandItem
+                    key={t.id}
+                    // Searchable by both the target status and the transition's own name.
+                    value={`${t.to.name} ${t.name} ${t.id}`}
+                    onSelect={() => move(t)}
+                    className="gap-3"
+                  >
+                    <IssueStatusBadge status={t.to.name} category={t.to.statusCategory} className="min-w-0 shrink" />
+                    {t.name.toLowerCase() !== t.to.name.toLowerCase() && (
+                      <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground" title={t.name}>
+                        {t.name}
+                      </span>
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

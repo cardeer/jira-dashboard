@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshCwIcon, SearchIcon } from 'lucide-react';
+import { ChevronLeftIcon, ChevronRightIcon, ListIcon, ListTreeIcon, PlusIcon, RefreshCwIcon, SearchIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -41,6 +41,8 @@ export function TasksPage() {
   const status = (['open', 'done', 'all'].includes(get('status')) ? get('status') : 'open') as TaskFilter;
   const boardId = /^\d+$/.test(get('board')) ? get('board') : null;
   const size = PAGE_SIZES.includes(Number(get('size'))) ? Number(get('size')) : 25;
+  // ?display=all shows every matching task on one page; default is paged.
+  const showAll = get('display') === 'all';
   const [query, setQuery] = useUrlSearchInput('q');
 
   const [pickedBoard, setPickedBoard] = useState<Board | null>(null);
@@ -58,20 +60,27 @@ export function TasksPage() {
   });
   const current = pager.key === queryKey ? pager : { key: queryKey, tokens: [null], index: 0 };
 
-  const { data, loading, error, reload } = useAsync(
-    (s) => api.tasksPage(creds, taskQuery, { token: current.tokens[current.index], size }, s),
-    [creds, queryKey, current.index],
+  const paged = useAsync(
+    (s) => (showAll ? Promise.resolve(null) : api.tasksPage(creds, taskQuery, { token: current.tokens[current.index], size }, s)),
+    [creds, queryKey, current.index, showAll],
   );
+  const everything = useAsync(
+    (s) => (showAll ? api.tasksAll(creds, taskQuery, s) : Promise.resolve(null)),
+    [creds, queryKey, showAll],
+  );
+  const { loading, error, reload } = showAll ? everything : paged;
+  const data = showAll ? everything.data : paged.data;
 
   // Status changes are applied locally right away (Jira has already accepted them).
   const [overrides, setOverrides] = useState<Record<string, { status: string; statusCategory: StatusCategory }>>({});
   const [createOpen, setCreateOpen] = useState(false);
 
+  const nextToken = paged.data?.nextPageToken ?? null;
   const goNext = () =>
-    data?.nextPageToken &&
+    nextToken &&
     setPager(() => {
       const tokens = [...current.tokens];
-      tokens[current.index + 1] = data.nextPageToken;
+      tokens[current.index + 1] = nextToken;
       return { key: queryKey, tokens, index: current.index + 1 };
     });
   const goPrev = () => setPager({ ...current, index: Math.max(0, current.index - 1) });
@@ -115,6 +124,21 @@ export function TasksPage() {
           <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search key, title or description…" className="h-7 pl-8" />
         </div>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={showAll ? 'all' : 'paged'}
+          onValueChange={(v) => v && set({ display: v === 'all' ? 'all' : null })}
+          aria-label="Display"
+        >
+          <ToggleGroupItem value="paged" aria-label="Paged">
+            <ListIcon /> Paged
+          </ToggleGroupItem>
+          <ToggleGroupItem value="all" aria-label="Show all on one page">
+            <ListTreeIcon /> Show all
+          </ToggleGroupItem>
+        </ToggleGroup>
         <Button
           variant="outline"
           size="sm"
@@ -199,11 +223,20 @@ export function TasksPage() {
             )}
           </TableBody>
         </Table>
-        {data && (rows.length > 0 || current.index > 0) && (
+        {showAll && everything.data && rows.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-muted-foreground">
+            <span className="tabular-nums">
+              {everything.data.truncated
+                ? `Showing the first ${rows.length.toLocaleString()}${everything.data.total !== null ? ` of ~${everything.data.total.toLocaleString()}` : ''} tasks. Narrow the filters to see the rest.`
+                : `All ${rows.length.toLocaleString()} tasks`}
+            </span>
+          </div>
+        )}
+        {!showAll && paged.data && (rows.length > 0 || current.index > 0) && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
             <span className="text-sm text-muted-foreground tabular-nums">
               {rows.length ? `${from}–${from + rows.length - 1}` : '0'}
-              {data.total !== null && ` of ${data.total >= 1000 ? '~' : ''}${data.total.toLocaleString()}`}
+              {paged.data.total !== null && ` of ${paged.data.total >= 1000 ? '~' : ''}${paged.data.total.toLocaleString()}`}
             </span>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -223,7 +256,7 @@ export function TasksPage() {
                 <ChevronLeftIcon data-icon="inline-start" /> Previous
               </Button>
               <span className="text-sm tabular-nums">Page {current.index + 1}</span>
-              <Button variant="outline" size="sm" onClick={goNext} disabled={!data.nextPageToken || loading}>
+              <Button variant="outline" size="sm" onClick={goNext} disabled={!nextToken || loading}>
                 Next <ChevronRightIcon data-icon="inline-end" />
               </Button>
             </div>

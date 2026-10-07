@@ -10,9 +10,21 @@ const TONE = {
 };
 
 /** Jira issue status, coloured by its status category like Jira does. */
-export function IssueStatusBadge({ status, category }: { status: string; category: StatusCategory }) {
+export function IssueStatusBadge({
+  status,
+  category,
+  className,
+}: {
+  status: string;
+  category: StatusCategory;
+  className?: string;
+}) {
   const tone = category === 'done' ? TONE.done : category === 'indeterminate' ? TONE.progress : TONE.todo;
-  return <Badge className={cn('uppercase tracking-wide', tone)}>{status}</Badge>;
+  return (
+    <Badge className={cn('max-w-full uppercase tracking-wide', tone, className)} title={status}>
+      <span className="truncate">{status}</span>
+    </Badge>
+  );
 }
 
 export type ReleaseState = 'released' | 'overdue' | 'unreleased' | 'archived';

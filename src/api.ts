@@ -223,7 +223,7 @@ const TASK_FIELDS = ['summary', 'status', 'priority', 'issuetype', 'project', 'u
 async function tasksPage(
   c: Credentials,
   q: TaskQuery,
-  page: { token: string | null; size: number },
+  page: { token: string | null; size: number; count?: boolean },
   signal?: AbortSignal,
 ): Promise<TaskPage> {
   interface F {
@@ -251,10 +251,12 @@ async function tasksPage(
         signal,
       ),
       // Totals are a nice-to-have; never fail the page for them.
-      jiraRequest<{ count: number }>(c, 'POST', '/search/approximate-count', { data: { jql: j } }, signal).then(
-        (r) => r.count,
-        () => null,
-      ),
+      page.count === false
+        ? Promise.resolve(null)
+        : jiraRequest<{ count: number }>(c, 'POST', '/search/approximate-count', { data: { jql: j } }, signal).then(
+            (r) => r.count,
+            () => null,
+          ),
     ]);
   let res: Res;
   let total: number | null;
@@ -286,6 +288,26 @@ async function tasksPage(
     nextPageToken: res.isLast ? null : (res.nextPageToken ?? null),
     total,
   };
+}
+
+/** Most tasks "Show all" will load before stopping (and reporting truncation). */
+export const SHOW_ALL_CAP = 1000;
+
+/** Every matching task on one page, fetched 100 at a time up to SHOW_ALL_CAP. */
+async function tasksAll(
+  c: Credentials,
+  q: TaskQuery,
+  signal?: AbortSignal,
+): Promise<{ tasks: Task[]; total: number | null; truncated: boolean }> {
+  const first = await tasksPage(c, q, { token: null, size: 100 }, signal);
+  const tasks = [...first.tasks];
+  let token = first.nextPageToken;
+  while (token && tasks.length < SHOW_ALL_CAP) {
+    const next = await tasksPage(c, q, { token, size: 100, count: false }, signal);
+    tasks.push(...next.tasks);
+    token = next.nextPageToken;
+  }
+  return { tasks: tasks.slice(0, SHOW_ALL_CAP), total: first.total, truncated: Boolean(token) || tasks.length > SHOW_ALL_CAP };
 }
 
 export interface Transition {
@@ -878,6 +900,7 @@ export const api = {
   board,
   searchUsers,
   tasksPage,
+  tasksAll,
   transitions,
   transitionIssue,
   issueTypes,
