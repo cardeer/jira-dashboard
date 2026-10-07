@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import {
@@ -26,9 +26,10 @@ import { cn } from '@/lib/utils';
 import { BowShooter } from './bow-shooter';
 import { GachaReveal, type RevealedVote } from './gacha-reveal';
 import { PickBurst } from './pick-burst';
+import { PokeAlert } from './poke-alert';
 import { roomLink } from './index';
 import { formatNumber, isNumeric, numericScale, tryParsePoints, voteStats } from './points';
-import { usePlanRoom, type Member, type RoomConfig } from './use-plan-room';
+import { REACTIONS, usePlanRoom, type Member, type ReactionKey, type RoomConfig, type SeatReaction } from './use-plan-room';
 import './plan.css';
 
 const NAME_KEY = 'plan.name';
@@ -135,7 +136,24 @@ type Seat = Member & {
 };
 
 function Room({ roomId, name, initialConfig }: { roomId: string; name: string; initialConfig: RoomConfig | null }) {
-  const { selfId, me, peers, room, revealCount, joinError, updateRoom, setVote, setName, becomeHost } = usePlanRoom(
+  const {
+    selfId,
+    me,
+    peers,
+    room,
+    revealCount,
+    joinError,
+    reactions,
+    poked,
+    incomingPoke,
+    updateRoom,
+    setVote,
+    setName,
+    becomeHost,
+    poke,
+    react,
+    dismissPoke,
+  } = usePlanRoom(
     roomId,
     name,
     initialConfig,
@@ -143,6 +161,24 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
   const [renaming, setRenaming] = useState(false);
   const [showReveal, setShowReveal] = useState(false);
   const [mode, setMode] = useState(() => (readStored(MODE_KEY) === 'bow' ? 'bow' : 'cards'));
+  // Light client-side throttles so nobody can spam pokes or reactions.
+  const lastPoke = useRef<Record<string, number>>({});
+  const [reactCooldown, setReactCooldown] = useState(false);
+  const pokeSeat = (id: string, name: string) => {
+    const now = Date.now();
+    if (now - (lastPoke.current[id] ?? 0) < 3000) {
+      toast(`You just poked ${name} — give them a sec.`);
+      return;
+    }
+    lastPoke.current[id] = now;
+    poke(id);
+  };
+  const sendReaction = (key: ReactionKey) => {
+    if (reactCooldown) return;
+    react(key);
+    setReactCooldown(true);
+    setTimeout(() => setReactCooldown(false), 1200);
+  };
 
   const points = useMemo(() => (room.config ? tryParsePoints(room.config.points).points : []), [room.config]);
   const scale = useMemo(() => numericScale(points), [points]);
@@ -271,11 +307,17 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
             )}
           </CardHeader>
           <CardContent>
-            <ul className="flex flex-wrap justify-center gap-x-4 gap-y-5 py-2">
+            <ul className="flex flex-wrap justify-center gap-x-4 gap-y-5 pt-9 pb-2">
               {seats.map((s) => {
                 const v = voteOf(s);
                 return (
-                  <li key={s.id} className="flex w-28 flex-col items-center gap-1.5">
+                  <li key={s.id} className="relative flex w-28 flex-col items-center gap-1.5">
+                    {reactions[s.id] && <ReactionBubble reaction={reactions[s.id]} />}
+                    <PokeTarget
+                      n={poked[s.id]}
+                      label={s.self ? undefined : `Poke ${s.name}`}
+                      onPoke={s.self ? undefined : () => pokeSeat(s.id, s.name)}
+                    >
                     <div
                       key={v === null ? 'empty' : room.revealed ? 'up' : `down-${s.picks ?? 0}`}
                       className={cn(
@@ -291,6 +333,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                       {/* Fixed intensity: the burst must not hint at the hidden value. */}
                       {v !== null && !room.revealed && (s.picks ?? 0) > 0 && <PickBurst intensity={0.5} />}
                     </div>
+                    </PokeTarget>
                     <div className="flex w-full items-start justify-center gap-1 text-xs leading-snug">
                       {s.host && <CrownIcon className="mt-0.5 size-3 shrink-0 text-amber-500" aria-label="Host" />}
                       <span className={cn('min-w-0 text-center break-words', s.self && 'font-semibold')} title={s.name}>
@@ -306,6 +349,20 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                 );
               })}
             </ul>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+              {REACTIONS.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  disabled={reactCooldown}
+                  onClick={() => sendReaction(r.key)}
+                  className="flex items-center gap-1 rounded-full border bg-card px-2.5 py-1 text-xs font-bold tracking-wide transition-all enabled:hover:-translate-y-0.5 enabled:hover:border-primary enabled:active:scale-95 disabled:opacity-50"
+                >
+                  <span className="text-sm leading-none">{r.emoji}</span> {r.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them.</p>
             {room.revealed && revealed.length > 0 && (
               <RevealSummary votes={revealed} points={points} onReplay={() => setShowReveal(true)} />
             )}
@@ -395,6 +452,8 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
         }}
       />
 
+      {incomingPoke && <PokeAlert key={incomingPoke.n} fromName={incomingPoke.fromName} onClose={dismissPoke} />}
+
       {showReveal && room.revealed && revealed.length > 0 && (
         <GachaReveal votes={revealed} points={points} onClose={() => setShowReveal(false)} />
       )}
@@ -437,5 +496,65 @@ function RevealSummary({ votes, points, onReplay }: { votes: RevealedVote[]; poi
         ))}
       </div>
     </div>
+  );
+}
+
+/** Wraps a seat card: other people's seats are pokeable, and every view shows the jab when `n` changes. */
+function PokeTarget({ n, label, onPoke, children }: { n?: number; label?: string; onPoke?: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const first = useRef(n);
+  useEffect(() => {
+    if (n === undefined || n === first.current) return;
+    ref.current?.animate(
+      [
+        { transform: 'translateX(0) rotate(0)' },
+        { transform: 'translateX(6px) rotate(4deg)' },
+        { transform: 'translateX(-5px) rotate(-3deg)' },
+        { transform: 'translateX(4px) rotate(2deg)' },
+        { transform: 'translateX(0) rotate(0)' },
+      ],
+      { duration: 450, delay: 200, easing: 'ease-out' },
+    );
+  }, [n]);
+  const finger = n !== undefined && n !== first.current && (
+    <span key={n} className="seat-poke-finger" aria-hidden>
+      👉
+    </span>
+  );
+  if (!onPoke) {
+    return (
+      <div ref={ref} className="relative">
+        {children}
+        {finger}
+      </div>
+    );
+  }
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={onPoke} title={label} aria-label={label} className="group relative block rounded-lg">
+        {children}
+        <span className="pointer-events-none absolute inset-x-0 -bottom-2 mx-auto w-max rounded-full bg-foreground px-1.5 py-0.5 text-[10px] font-bold text-background opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          👉 Poke
+        </span>
+      </button>
+      {finger}
+    </div>
+  );
+}
+
+function ReactionBubble({ reaction }: { reaction: SeatReaction }) {
+  const r = REACTIONS.find((x) => x.key === reaction.key);
+  if (!r) return null;
+  return (
+    <span key={reaction.n} className="pointer-events-none absolute inset-x-0 top-0 h-24" aria-live="polite">
+      <span className="seat-bubble">
+        {r.emoji} {r.label}
+      </span>
+      {[-22, 4, 26].map((fx, i) => (
+        <span key={i} className="seat-float" style={{ '--fx': `${fx}px`, animationDelay: `${i * 120}ms` } as CSSProperties} aria-hidden>
+          {r.emoji}
+        </span>
+      ))}
+    </span>
   );
 }

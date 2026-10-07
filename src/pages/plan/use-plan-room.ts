@@ -28,6 +28,26 @@ export type Member = {
   picks: number;
 };
 
+export const REACTIONS = [
+  { key: 'ready', emoji: '✅', label: 'READY' },
+  { key: 'open', emoji: '🙋', label: 'OPEN' },
+  { key: 'hurry', emoji: '⏰', label: 'HURRY' },
+  { key: 'wait', emoji: '✋', label: 'WAIT' },
+  { key: 'hmm', emoji: '🤔', label: 'HMM' },
+  { key: 'break', emoji: '☕', label: 'BREAK' },
+  { key: 'nice', emoji: '🎉', label: 'NICE' },
+] as const;
+export type ReactionKey = (typeof REACTIONS)[number]['key'];
+
+/** Transient seat effects. `n` changes on every event so the animation replays. */
+export type SeatReaction = { key: ReactionKey; n: number };
+export type Poke = { from: string; fromName: string; n: number };
+
+type PokeMsg = { to: string; fromName: string };
+type ReactMsg = { key: ReactionKey };
+
+let fxCounter = 0;
+
 const hostKey = (roomId: string) => `plan.host.${roomId}`;
 
 export function markHost(roomId: string) {
@@ -60,12 +80,32 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
   /** Bumps each time this tab sees the cards being revealed live (not when joining an already revealed round). */
   const [revealCount, setRevealCount] = useState(0);
   const [joinError, setJoinError] = useState('');
+  /** Latest reaction per seat (peer id or selfId). */
+  const [reactions, setReactions] = useState<Record<string, SeatReaction>>({});
+  /** Poke counter per seat, so everyone can see who just got poked. */
+  const [poked, setPoked] = useState<Record<string, number>>({});
+  /** Set when someone pokes me. */
+  const [incomingPoke, setIncomingPoke] = useState<Poke | null>(null);
 
   const meRef = useRef(me);
   meRef.current = me;
   const roomRef = useRef(room);
   roomRef.current = room;
-  const sendRef = useRef<{ member: (m: Member) => void; room: (r: RoomState) => void } | null>(null);
+  const sendRef = useRef<{
+    member: (m: Member) => void;
+    room: (r: RoomState) => void;
+    poke: (p: PokeMsg) => void;
+    react: (r: ReactMsg) => void;
+  } | null>(null);
+
+  const showReaction = useCallback((seat: string, key: ReactionKey) => {
+    if (!REACTIONS.some((r) => r.key === key)) return;
+    setReactions((r) => ({ ...r, [seat]: { key, n: ++fxCounter } }));
+  }, []);
+  const showPoke = useCallback((from: string, msg: PokeMsg) => {
+    setPoked((p) => ({ ...p, [msg.to]: ++fxCounter }));
+    if (msg.to === selfId) setIncomingPoke({ from, fromName: String(msg.fromName).slice(0, 30), n: fxCounter });
+  }, []);
 
   const applyRoom = useCallback((next: RoomState) => {
     const cur = roomRef.current;
@@ -82,9 +122,14 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     });
     const memberAction = r.makeAction<Member>('member');
     const roomAction = r.makeAction<RoomState>('room');
+    // Pokes go to everyone so all seats can show the jab; only the target gets the alert.
+    const pokeAction = r.makeAction<PokeMsg>('poke');
+    const reactAction = r.makeAction<ReactMsg>('react');
     sendRef.current = {
       member: (m) => void memberAction.send(m),
       room: (s) => void roomAction.send(s),
+      poke: (p) => void pokeAction.send(p),
+      react: (x) => void reactAction.send(x),
     };
 
     r.onPeerJoin = (id) => {
@@ -98,13 +143,15 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
       });
     memberAction.onMessage = (m, { peerId }) => setPeers((p) => ({ ...p, [peerId]: m }));
     roomAction.onMessage = (s) => void applyRoom(s);
+    pokeAction.onMessage = (m, { peerId }) => showPoke(peerId, m);
+    reactAction.onMessage = (m, { peerId }) => showReaction(peerId, m.key);
 
     return () => {
       sendRef.current = null;
       void r.leave();
       setPeers({});
     };
-  }, [roomId, applyRoom]);
+  }, [roomId, applyRoom, showPoke, showReaction]);
 
   // Tell everyone whenever my seat changes.
   useEffect(() => {
@@ -136,5 +183,39 @@ export function usePlanRoom(roomId: string, name: string, initialConfig: RoomCon
     setMe((m) => ({ ...m, host: true }));
   }, [roomId]);
 
-  return { selfId, me, peers, room, revealCount, joinError, updateRoom, setVote, setName, becomeHost };
+  const poke = useCallback(
+    (to: string) => {
+      const msg = { to, fromName: meRef.current.name };
+      showPoke(selfId, msg);
+      sendRef.current?.poke(msg);
+    },
+    [showPoke],
+  );
+  const react = useCallback(
+    (key: ReactionKey) => {
+      showReaction(selfId, key);
+      sendRef.current?.react({ key });
+    },
+    [showReaction],
+  );
+  const dismissPoke = useCallback(() => setIncomingPoke(null), []);
+
+  return {
+    selfId,
+    me,
+    peers,
+    room,
+    revealCount,
+    joinError,
+    reactions,
+    poked,
+    incomingPoke,
+    updateRoom,
+    setVote,
+    setName,
+    becomeHost,
+    poke,
+    react,
+    dismissPoke,
+  };
 }
