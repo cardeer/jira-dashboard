@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react';
-import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { eachDay, formatDay, fromISO, isWeekend, timeRange, toISO } from '@/dates';
@@ -63,7 +64,10 @@ interface Props {
 
 export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Props) {
   const byPerson = groupBy === 'person';
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Groups whose state differs from the default: people start collapsed (one total row each),
+  // projects start expanded.
+  const [toggled, setToggled] = useState<Set<string>>(new Set());
+  const isOpen = (key: string) => (byPerson ? toggled.has(key) : !toggled.has(key));
   const today = toISO(new Date());
   const days = useMemo(() => eachDay(from, to), [from, to]);
 
@@ -117,7 +121,7 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
   }, [entries, byPerson]);
 
   const toggle = (key: string) =>
-    setCollapsed((s) => {
+    setToggled((s) => {
       const n = new Set(s);
       if (!n.delete(key)) n.add(key);
       return n;
@@ -219,7 +223,7 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
           </thead>
           <tbody>
             {groups.map((g) => {
-              const open = !collapsed.has(g.key);
+              const open = isOpen(g.key);
               return (
                 <Fragment key={g.key}>
                   <tr className="cursor-pointer font-semibold" onClick={() => toggle(g.key)}>
@@ -294,6 +298,28 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
         </table>
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t px-4 py-2.5 text-xs text-muted-foreground">
+        {groups.length > 1 && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-ml-2"
+            onClick={() => {
+              const allOpen = groups.every((g) => isOpen(g.key));
+              // Store the keys that should differ from each group's default.
+              setToggled(new Set(allOpen === byPerson ? [] : groups.map((g) => g.key)));
+            }}
+          >
+            {groups.every((g) => isOpen(g.key)) ? (
+              <>
+                <ChevronsDownUpIcon data-icon="inline-start" /> Collapse all
+              </>
+            ) : (
+              <>
+                <ChevronsUpDownIcon data-icon="inline-start" /> Expand all
+              </>
+            )}
+          </Button>
+        )}
         {byPerson ? 'Each person’s day:' : 'Daily totals:'}
         <span className="border-b-[3px] border-amber-500">under {LOW_H}h</span>
         <span className="border-b-[3px] border-emerald-500">{LOW_H}–{DAY_TARGET_H}h</span>

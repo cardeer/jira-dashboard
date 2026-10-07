@@ -190,7 +190,14 @@ export function WorklogsPage() {
         {data && (
           <div className={cn(loading && 'opacity-60 transition-opacity')}>
             <TabsContent value="timesheet">
-              <Timesheet entries={data} from={range.from} to={range.to} site={creds.site} groupBy={everyone ? 'person' : 'project'} />
+              <Timesheet
+                key={everyone ? 'person' : 'project'}
+                entries={data}
+                from={range.from}
+                to={range.to}
+                site={creds.site}
+                groupBy={everyone ? 'person' : 'project'}
+              />
             </TabsContent>
             <TabsContent value="calendar">
               <CalendarView entries={data} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} />
