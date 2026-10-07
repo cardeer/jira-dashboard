@@ -49,14 +49,16 @@ function basicAuth(email: string, token: string) {
  * Same-origin path that the host rewrites to https://<site>.atlassian.net (see vercel.json and
  * vite.config.ts). Calling Jira cross-origin from a browser is blocked by CORS.
  */
-const jiraBase = (c: Credentials) => `/api/jira/${new URL(c.site).hostname.split('.')[0]}/rest/api/3`;
+const API_PATHS = { core: '/rest/api/3', agile: '/rest/agile/1.0' } as const;
+const jiraBase = (c: Credentials, api: keyof typeof API_PATHS = 'core') =>
+  `/api/jira/${new URL(c.site).hostname.split('.')[0]}${API_PATHS[api]}`;
 
 /** Talks to Jira Cloud through the same-origin rewrite, using axios. */
 async function jiraRequest<T>(
   c: Credentials,
   method: 'GET' | 'POST',
   path: string,
-  opts: { params?: Record<string, string | number>; data?: unknown } = {},
+  opts: { params?: Record<string, string | number>; data?: unknown; api?: keyof typeof API_PATHS } = {},
   signal?: AbortSignal,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -64,7 +66,7 @@ async function jiraRequest<T>(
     try {
       res = await axios.request({
         method,
-        url: `${jiraBase(c)}${path}`,
+        url: `${jiraBase(c, opts.api)}${path}`,
         params: opts.params,
         data: opts.data,
         signal,
@@ -113,6 +115,8 @@ async function jiraRequest<T>(
 
 const jiraGet = <T,>(c: Credentials, path: string, params: Record<string, string | number> = {}, signal?: AbortSignal) =>
   jiraRequest<T>(c, 'GET', path, { params }, signal);
+const agileGet = <T,>(c: Credentials, path: string, params: Record<string, string | number> = {}, signal?: AbortSignal) =>
+  jiraRequest<T>(c, 'GET', path, { params, api: 'agile' }, signal);
 
 async function searchIssues<F>(c: Credentials, jql: string, fields: string[], signal?: AbortSignal, cap = 1000) {
   interface Page {
@@ -226,9 +230,12 @@ async function worklogs(
   from: string,
   to: string,
   scope: WorklogScope | null,
+  boardId: string | null,
   signal?: AbortSignal,
 ): Promise<WorklogResult> {
   const everyone = scope === 'all';
+  // A board is defined by a saved filter; `filter = <id>` limits issues to the board's.
+  const boardJql = boardId ? `filter = ${Number(await boardFilterId(c, boardId, signal))} AND ` : '';
   const authorId = everyone ? null : (scope ?? (await me(c, signal)).accountId);
 
   // Pad the JQL window by a day each side: worklogDate is evaluated in the viewer's timezone
@@ -248,7 +255,7 @@ async function worklogs(
   const cap = everyone ? WORKLOG_ISSUE_CAP.all : WORKLOG_ISSUE_CAP.person;
   const issues = await searchIssues<F>(
     c,
-    authorId ? `worklogAuthor = "${authorId}" AND ${dateJql}` : dateJql,
+    `${boardJql}${authorId ? `worklogAuthor = "${authorId}" AND ` : ''}${dateJql}`,
     ['summary', 'status', 'issuetype', 'project'],
     signal,
     cap,
@@ -318,6 +325,57 @@ async function worklogs(
     entries: results.flat().sort((a, b) => (a.started < b.started ? 1 : -1)),
     truncated: issues.length >= cap,
   };
+}
+
+export interface Board {
+  id: string;
+  name: string;
+  type: string;
+  /** e.g. "Nipa Cloud Service (NCS)" */
+  location?: string;
+}
+
+interface RawBoard {
+  id: number;
+  name: string;
+  type: string;
+  location?: { displayName?: string; projectName?: string; projectKey?: string };
+}
+const toBoard = (b: RawBoard): Board => ({
+  id: String(b.id),
+  name: b.name,
+  type: b.type,
+  location: b.location?.displayName ?? (b.location?.projectName ? `${b.location.projectName} (${b.location.projectKey})` : undefined),
+});
+
+/** Boards you can see, optionally matching a name (Jira Software Agile API). */
+async function boards(c: Credentials, name: string, signal?: AbortSignal): Promise<Board[]> {
+  const res = await agileGet<{ values: RawBoard[] }>(
+    c,
+    '/board',
+    { maxResults: 50, ...(name.trim() ? { name: name.trim() } : {}) },
+    signal,
+  );
+  return res.values.map(toBoard);
+}
+
+async function board(c: Credentials, boardId: string, signal?: AbortSignal): Promise<Board> {
+  return toBoard(await agileGet<RawBoard>(c, `/board/${encodeURIComponent(boardId)}`, {}, signal));
+}
+
+/** The saved filter behind a board. Cached: it rarely changes. */
+const boardFilterCache = new Map<string, Promise<string>>();
+function boardFilterId(c: Credentials, boardId: string, signal?: AbortSignal): Promise<string> {
+  const id = `${c.site}|${boardId}`;
+  let p = boardFilterCache.get(id);
+  if (!p) {
+    p = agileGet<{ filter: { id: string | number } }>(c, `/board/${encodeURIComponent(boardId)}/configuration`, {}, signal).then(
+      (cfg) => String(cfg.filter.id),
+    );
+    p.catch(() => boardFilterCache.delete(id));
+    boardFilterCache.set(id, p);
+  }
+  return p;
 }
 
 export interface ProjectRef {
@@ -652,6 +710,8 @@ async function addWorklog(c: Credentials, w: NewWorklog): Promise<void> {
 export const api = {
   me,
   user,
+  boards,
+  board,
   searchUsers,
   tasks,
   worklogs,

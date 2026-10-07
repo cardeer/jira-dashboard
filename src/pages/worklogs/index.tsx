@@ -9,8 +9,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { ErrorAlert } from '@/components/error-alert';
 import { PageHeader } from '@/components/page-header';
+import { BoardPicker } from '@/components/board-picker';
 import { UserPicker } from '@/components/user-picker';
-import { api } from '@/api';
+import { api, type Board } from '@/api';
 import { PRESETS, formatDuration, fromISO, monthGrid, presetRange, toISO, type Preset } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useSearchState } from '@/lib/use-search-state';
@@ -53,6 +54,12 @@ export function WorklogsPage() {
   const everyone = userParam === 'all';
   const viewingId = !everyone && userParam && userParam !== me.accountId ? userParam : null;
   const readOnly = everyone || viewingId !== null;
+
+  // ?board=<id> limits logs to that Jira board's issues (a team's board).
+  const boardId = /^\d+$/.test(get('board')) ? get('board') : null;
+  const [pickedBoard, setPickedBoard] = useState<Board | null>(null);
+  const boardReq = useAsync((s) => (boardId ? api.board(creds, boardId, s) : Promise.resolve(null)), [creds, boardId]);
+  const board = boardId ? (boardReq.data ?? (pickedBoard?.id === boardId ? pickedBoard : null)) : null;
   const [picked, setPicked] = useState<Person | null>(null);
   const personReq = useAsync((s) => (viewingId ? api.user(creds, viewingId, s) : Promise.resolve(null)), [creds, viewingId]);
   // Show the picked person immediately while their profile loads (or when opened from a link).
@@ -78,8 +85,8 @@ export function WorklogsPage() {
 
   const scope = everyone ? 'all' : viewingId;
   const { data: result, loading, error, reload } = useAsync(
-    (s) => api.worklogs(creds, range.from, range.to, scope, s),
-    [creds, range.from, range.to, scope],
+    (s) => api.worklogs(creds, range.from, range.to, scope, boardId, s),
+    [creds, range.from, range.to, scope, boardId],
   );
   const data = result?.entries ?? null;
   const stats = useMemo(() => summarize(data ?? [], range.from, range.to), [data, range.from, range.to]);
@@ -95,8 +102,16 @@ export function WorklogsPage() {
               ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
               : 'Time you logged across every project and team.'
         }
+        badge={board ? `Board: ${board.name}` : undefined}
         actions={
           <>
+            <BoardPicker
+              value={board}
+              onChange={(b) => {
+                setPickedBoard(b);
+                set({ board: b?.id ?? null });
+              }}
+            />
             <UserPicker
               value={everyone ? 'all' : person}
               onChange={(v) => {
@@ -114,6 +129,7 @@ export function WorklogsPage() {
       />
 
       {personReq.error && <ErrorAlert error={personReq.error} onRetry={personReq.reload} />}
+      {boardReq.error && <ErrorAlert error={boardReq.error} onRetry={boardReq.reload} />}
       {result?.truncated && (
         <Alert className="mb-4">
           <TriangleAlertIcon />
