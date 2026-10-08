@@ -52,3 +52,51 @@ export function useUrlSearchInput(key: string, extraPatch: Patch = {}, ms = 350)
 
   return [value, setValue] as const;
 }
+
+const readSaved = (storageKey: string): Record<string, string> => {
+  try {
+    const v = JSON.parse(localStorage.getItem(storageKey) ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * Remembers the given query params in localStorage and restores them when the page is opened
+ * without any of them (e.g. from the sidebar). Returns false while the restore redirect is pending,
+ * so the page can skip rendering (and fetching) with default filters first.
+ */
+export function useRememberedSearch(storageKey: string, keys: readonly string[]) {
+  const [params, setParams] = useSearchParams();
+  const hasAny = keys.some((k) => params.has(k));
+  // What to restore, read once per visit; only applied when the URL has none of the keys.
+  const [saved] = useState(() =>
+    Object.entries(readSaved(storageKey)).filter(([k, v]) => keys.includes(k) && typeof v === 'string' && v),
+  );
+  const [done, setDone] = useState(false);
+  // Wait until the restored params are actually in the URL (router updates land asynchronously).
+  const pending = !done && !hasAny && saved.length > 0;
+
+  useEffect(() => {
+    if (!pending) {
+      setDone(true);
+      return;
+    }
+    const next = new URLSearchParams(params);
+    for (const [k, v] of saved) next.set(k, v);
+    setParams(next, { replace: true });
+  }, [pending, params, saved, setParams]);
+
+  const snapshot = JSON.stringify(Object.fromEntries(keys.flatMap((k) => (params.has(k) ? [[k, params.get(k)!]] : []))));
+  useEffect(() => {
+    if (pending) return;
+    try {
+      localStorage.setItem(storageKey, snapshot);
+    } catch {
+      /* storage unavailable: filters just won't be remembered */
+    }
+  }, [pending, storageKey, snapshot]);
+
+  return !pending;
+}

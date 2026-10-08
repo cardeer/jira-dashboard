@@ -28,7 +28,7 @@ import { api, SHOW_ALL_CAP, type Board, type TaskQuery } from '@/api';
 import { formatDay, formatDuration, relativeTime } from '@/dates';
 import { formatPoints } from '@/lib/points';
 import { useSession } from '@/lib/session';
-import { useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
+import { useRememberedSearch, useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
 import type { StatusCategory, Task, TaskFilter, TaskScope } from '../../../shared/types';
@@ -45,7 +45,15 @@ const STATUSES: { id: TaskFilter; label: string }[] = [
   { id: 'all', label: 'All' },
 ];
 
+// Filters remembered between visits (search text, page and the open issue are not).
+const REMEMBERED = ['view', 'scope', 'status', 'board', 'display', 'size'] as const;
+
 export function TasksPage() {
+  const ready = useRememberedSearch('jira-dashboard:tasks-filters', REMEMBERED);
+  return ready ? <TasksPageContent /> : null;
+}
+
+function TasksPageContent() {
   const { creds } = useSession();
   const { get, set } = useSearchState();
 
