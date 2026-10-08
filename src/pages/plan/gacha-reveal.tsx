@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { GachaSky } from './gacha-sky';
 import { StarIcon } from 'lucide-react';
 import { cardRarity, formatNumber, RARITY_COLOR, roundRarity, voteStats, type Rarity } from './points';
 
@@ -14,6 +15,7 @@ interface Props {
   onClose: () => void;
 }
 
+/** CSS fallback meteor (no WebGL / reduced motion). */
 const METEOR_MS = 1250;
 const CARD_STAGGER_MS = 260;
 
@@ -41,25 +43,38 @@ function useStars(count: number) {
   );
 }
 
+const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
 export function GachaReveal({ votes, points, onClose }: Props) {
-  
   const values = useMemo(() => votes.map((v) => v.vote), [votes]);
   const stats = useMemo(() => voteStats(values, points), [values, points]);
   const rarity = roundRarity(values, points);
   const stars = useStars(110);
+  // One shooting star per voter, colored like their card; gold lands last for the drama.
+  const meteors = useMemo(
+    () =>
+      votes
+        .map((v) => cardRarity(v.vote, values, points))
+        .sort((a, b) => a - b)
+        .map((r) => ({ color: RARITY_COLOR[r], rarity: r })),
+    // Fixed for the life of this reveal, so the 3D scene isn't rebuilt mid-animation.
+    [],
+  );
+  const [webgl, setWebgl] = useState(() => !prefersReducedMotion());
   // meteor -> cards (staggered) -> summary. A click skips ahead; a click on the summary closes.
   const [phase, setPhase] = useState<'meteor' | 'cards' | 'summary'>('meteor');
 
   useEffect(() => {
     if (phase === 'meteor') {
-      const t = setTimeout(() => setPhase('cards'), METEOR_MS);
+      // The 3D sky advances us when the last meteor lands; this timer is only a safety net.
+      const t = setTimeout(() => setPhase('cards'), webgl ? 2500 + meteors.length * 350 : METEOR_MS);
       return () => clearTimeout(t);
     }
     if (phase === 'cards') {
       const t = setTimeout(() => setPhase('summary'), 700 + votes.length * CARD_STAGGER_MS);
       return () => clearTimeout(t);
     }
-  }, [phase, votes.length]);
+  }, [phase, votes.length, webgl, meteors.length]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -86,13 +101,17 @@ export function GachaReveal({ votes, points, onClose }: Props) {
       aria-modal="true"
       aria-label="Revealed points"
     >
-      <div className="gacha-stars" aria-hidden>
-        {stars.map((s, i) => (
-          <span key={i} className="gacha-star" style={s} />
-        ))}
-      </div>
+      {webgl ? (
+        <GachaSky meteors={meteors} onLanded={() => setPhase((p) => (p === 'meteor' ? 'cards' : p))} onError={() => setWebgl(false)} />
+      ) : (
+        <div className="gacha-stars" aria-hidden>
+          {stars.map((s, i) => (
+            <span key={i} className="gacha-star" style={s} />
+          ))}
+        </div>
+      )}
 
-      {phase === 'meteor' && <div className="gacha-meteor" aria-hidden />}
+      {phase === 'meteor' && !webgl && <div className="gacha-meteor" aria-hidden />}
       {phase !== 'meteor' && (
         <>
           <div className="gacha-flash" aria-hidden />

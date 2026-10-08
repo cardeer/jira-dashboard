@@ -247,6 +247,12 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     if (revealCount > 0) setShowReveal(true);
   }, [revealCount]);
 
+  // Warm up the 3D reveal (three.js) in the background so the first reveal starts instantly.
+  useEffect(() => {
+    const t = setTimeout(() => void import('three').catch(() => {}), 3000);
+    return () => clearTimeout(t);
+  }, []);
+
   useEffect(() => {
     if (joinError) toast.error(joinError);
   }, [joinError]);
