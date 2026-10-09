@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { PencilIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatDay, formatDuration, timeRange } from '@/dates';
 import { cn } from '@/lib/utils';
@@ -6,7 +7,18 @@ import type { WorklogEntry } from '../../../shared/types';
 import { PersonAvatar } from '@/components/person-avatar';
 import { DAY_TARGET } from './aggregate';
 
-export function ByDay({ entries, site, showPeople = false }: { entries: WorklogEntry[]; site: string; showPeople?: boolean }) {
+export function ByDay({
+  entries,
+  site,
+  showPeople = false,
+  onEdit,
+}: {
+  entries: WorklogEntry[];
+  site: string;
+  showPeople?: boolean;
+  /** Makes each log clickable to edit it (omitted when viewing others' logs). */
+  onEdit?: (entry: WorklogEntry) => void;
+}) {
   const days = useMemo(() => {
     const m = new Map<string, WorklogEntry[]>();
     for (const e of entries) m.set(e.date, [...(m.get(e.date) ?? []), e]);
@@ -33,7 +45,25 @@ export function ByDay({ entries, site, showPeople = false }: { entries: WorklogE
               {list.map((e) => {
                 const r = timeRange(e.started, e.timeSpentSeconds);
                 return (
-                  <div key={e.id} className="flex items-start gap-4 px-4 py-3">
+                  <div
+                    key={e.id}
+                    className={cn(
+                      'group flex items-start gap-4 px-4 py-3',
+                      onEdit && 'cursor-pointer outline-none hover:bg-accent/60 focus-visible:bg-accent/60',
+                    )}
+                    {...(onEdit && {
+                      role: 'button',
+                      tabIndex: 0,
+                      title: 'Edit work log',
+                      onClick: () => onEdit(e),
+                      onKeyDown: (ev: React.KeyboardEvent) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                          ev.preventDefault();
+                          onEdit(e);
+                        }
+                      },
+                    })}
+                  >
                     <div className="w-28 shrink-0 pt-0.5 text-xs font-medium text-muted-foreground tabular-nums">
                       {r.from} – {r.to}
                       {r.nextDay && <sup>+1</sup>}
@@ -46,7 +76,7 @@ export function ByDay({ entries, site, showPeople = false }: { entries: WorklogE
                         </div>
                       )}
                       <div className="flex flex-wrap items-baseline gap-x-2">
-                        <a href={`${site}/browse/${e.issueKey}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-link hover:underline">
+                        <a href={`${site}/browse/${e.issueKey}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-link hover:underline" onClick={(ev) => ev.stopPropagation()}>
                           {e.issueKey}
                         </a>
                         <span className="text-sm">{e.summary}</span>
@@ -54,7 +84,10 @@ export function ByDay({ entries, site, showPeople = false }: { entries: WorklogE
                       </div>
                       {e.comment && <p className="mt-0.5 text-sm whitespace-pre-line text-muted-foreground">{e.comment}</p>}
                     </div>
-                    <div className="shrink-0 text-sm font-semibold tabular-nums">{formatDuration(e.timeSpentSeconds)}</div>
+                    <div className="flex shrink-0 items-center gap-2 text-sm font-semibold tabular-nums">
+                      {formatDuration(e.timeSpentSeconds)}
+                      {onEdit && <PencilIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />}
+                    </div>
                   </div>
                 );
               })}

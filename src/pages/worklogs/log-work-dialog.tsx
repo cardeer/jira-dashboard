@@ -1,7 +1,18 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import { AlertCircleIcon, CalendarIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon } from 'lucide-react';
+import { AlertCircleIcon, CalendarIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -21,10 +32,11 @@ import { IssueStatusBadge } from '@/components/status-badge';
 import { DurationInput } from '@/components/duration-input';
 import { TimePicker } from '@/components/time-picker';
 import { api, ApiError, type IssueOption } from '@/api';
-import { addMinutes, formatDay, formatDuration, fromISO, minutesBetween, toISO } from '@/dates';
+import { addMinutes, formatDay, formatDuration, fromISO, minutesBetween, timeRange, toISO } from '@/dates';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
+import type { WorklogEntry } from '../../../shared/types';
 
 const PRESETS = {
   morning: { label: 'Morning', start: '09:00', end: '12:30' },
@@ -37,10 +49,16 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** Date to pre-fill (the clicked calendar day). */
   date: string;
+  /** An existing work log to edit instead of logging new work. */
+  entry?: WorklogEntry | null;
   onLogged: () => void;
 }
 
-export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged }: Props) {
+export function LogWorkDialog({ open, onOpenChange, date: initialDate, entry: entryProp = null, onLogged }: Props) {
+  // Keep showing the edited log while the dialog animates closed (the parent clears it on close).
+  const lastEntry = useRef(entryProp);
+  if (open) lastEntry.current = entryProp;
+  const entry = open ? entryProp : lastEntry.current;
   const { creds, onUnauthorized } = useSession();
   // The task is kept between openings: logging several slots on the same task is common.
   const [issue, setIssue] = useState<IssueOption | null>(null);
@@ -51,14 +69,31 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
   const { time: end, nextDay } = addMinutes(start, minutes);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (!open) return;
-    setDate(initialDate);
-    setComment('');
     setError('');
-  }, [open, initialDate]);
+    if (entry) {
+      setIssue({
+        key: entry.issueKey,
+        summary: entry.summary,
+        issueType: entry.issueType,
+        status: entry.status,
+        statusCategory: 'unknown',
+        projectKey: entry.projectKey,
+        projectName: entry.projectName,
+      });
+      setDate(entry.date);
+      setStart(timeRange(entry.started, entry.timeSpentSeconds).from);
+      setMinutes(Math.round(entry.timeSpentSeconds / 60));
+      setComment(entry.comment);
+    } else {
+      setDate(initialDate);
+      setComment('');
+    }
+  }, [open, initialDate, entry]);
 
   /** Minutes from `from` to `to`; an earlier `to` means the next day. */
   const spanTo = (from: string, to: string) => {
@@ -80,10 +115,18 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
     setSubmitting(true);
     setError('');
     try {
-      await api.addWorklog(creds, { issueKey: issue.key, date, start, seconds: minutes * 60, comment });
-      toast.success(`Logged ${formatDuration(minutes * 60)} on ${issue.key}`, {
-        description: `${formatDay(date, { year: 'numeric' })}, ${start} – ${end}`,
-      });
+      const w = { issueKey: issue.key, date, start, seconds: minutes * 60, comment };
+      const when = `${formatDay(date, { year: 'numeric' })}, ${start} – ${end}`;
+      if (entry) {
+        await api.updateWorklog(creds, entry, w);
+        toast.success(
+          issue.key === entry.issueKey ? `Updated work log on ${issue.key}` : `Moved work log from ${entry.issueKey} to ${issue.key}`,
+          { description: `${formatDuration(minutes * 60)} · ${when}` },
+        );
+      } else {
+        await api.addWorklog(creds, w);
+        toast.success(`Logged ${formatDuration(minutes * 60)} on ${issue.key}`, { description: when });
+      }
       onOpenChange(false);
       onLogged();
     } catch (err) {
@@ -94,13 +137,34 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
     }
   }
 
+  async function remove() {
+    if (!entry) return;
+    setDeleting(true);
+    setError('');
+    try {
+      await api.deleteWorklog(creds, entry.issueKey, entry.id);
+      toast.success(`Deleted ${formatDuration(entry.timeSpentSeconds)} from ${entry.issueKey}`);
+      onOpenChange(false);
+      onLogged();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized();
+      setError((err as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit} className="grid min-w-0 grid-cols-1 gap-5">
           <DialogHeader>
-            <DialogTitle>Log work</DialogTitle>
-            <DialogDescription>Adds a work log to the selected Jira issue.</DialogDescription>
+            <DialogTitle>{entry ? 'Edit work log' : 'Log work'}</DialogTitle>
+            <DialogDescription>
+              {entry
+                ? 'Changes are saved to Jira. Picking another task moves the log there.'
+                : 'Adds a work log to the selected Jira issue.'}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="grid min-w-0 grid-cols-1 gap-1.5">
@@ -175,10 +239,33 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, onLogged 
           )}
 
           <DialogFooter>
+            {entry && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" variant="ghost" className="text-destructive hover:text-destructive sm:mr-auto" disabled={deleting || submitting}>
+                    {deleting ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete this work log?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {formatDuration(entry.timeSpentSeconds)} on {entry.issueKey} ({formatDay(entry.date, { year: 'numeric' })}) will be
+                      removed from Jira. This can’t be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep it</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={remove}>Delete</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={!valid || submitting}>
+            <Button type="submit" disabled={!valid || submitting || deleting}>
               {submitting && <Loader2Icon className="animate-spin" data-icon="inline-start" />}
-              Log {minutes > 0 ? formatDuration(minutes * 60) : 'work'}
+              {entry ? 'Save changes' : `Log ${minutes > 0 ? formatDuration(minutes * 60) : 'work'}`}
             </Button>
           </DialogFooter>
         </form>

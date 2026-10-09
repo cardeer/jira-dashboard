@@ -1,9 +1,10 @@
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, PencilIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { eachDay, formatDay, fromISO, isWeekend, timeRange, toISO } from '@/dates';
+import { eachDay, formatDay, formatDuration, fromISO, isWeekend, timeRange, toISO } from '@/dates';
 import { cn } from '@/lib/utils';
 import type { WorklogEntry } from '../../../shared/types';
 import { PersonAvatar } from '@/components/person-avatar';
@@ -92,9 +93,24 @@ interface Props {
   site: string;
   /** 'project' for one person's logs; 'person' (person → tasks) when viewing all members. */
   groupBy?: 'project' | 'person';
+  /** Makes task cells clickable to edit their logs (omitted when viewing others' logs). */
+  onEdit?: (entry: WorklogEntry) => void;
 }
 
-export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Props) {
+const logsOn = (task: TaskRow, day: string) =>
+  [...(task.perDay.get(day) ?? [])].sort((a, b) => (a.started < b.started ? -1 : 1));
+
+export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit }: Props) {
+  // A cell with several logs asks which one to edit, in a popover anchored to that cell.
+  const [chooser, setChooser] = useState<{ task: TaskRow; day: string } | null>(null);
+  const chooserAnchor = useRef<HTMLElement | null>(null);
+  const editCell = (task: TaskRow, day: string, el: HTMLElement) => {
+    const list = logsOn(task, day);
+    if (list.length === 1) return onEdit?.(list[0]);
+    chooserAnchor.current = el;
+    setChooser({ task, day });
+  };
+
   const byPerson = groupBy === 'person';
   // Groups whose state differs from the default: people start collapsed (one total row each),
   // projects start expanded.
@@ -164,7 +180,7 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
   /** One row's day cells plus week subtotals. */
   const cells = (
     perDay: (d: string) => number,
-    opts: { underline?: boolean; tip?: (d: string) => ReactNode; rowBg?: string } = {},
+    opts: { underline?: boolean; tip?: (d: string) => ReactNode; rowBg?: string; onClick?: (d: string, el: HTMLElement) => void } = {},
   ) =>
     weeks.map((w) => {
       const wk = w.days.reduce((s, d) => s + perDay(d), 0);
@@ -180,16 +196,31 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
             const className = cn(cellBase, dayCell, opts.rowBg, dayBg(d));
             if (s > 0 && opts.tip) {
               return (
-                <Tooltip key={d}>
+                // Not hoverable: the tooltip covers the cell above, which must stay reachable.
+                <Tooltip key={d} disableHoverableContent>
                   <TooltipTrigger asChild>
                     <td
                       tabIndex={0}
-                      className={cn(className, 'cursor-default outline-none hover:ring-2 hover:ring-primary hover:ring-inset focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset')}
+                      className={cn(
+                        className,
+                        opts.onClick ? 'cursor-pointer' : 'cursor-default',
+                        'outline-none hover:ring-2 hover:ring-primary hover:ring-inset focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset',
+                      )}
+                      {...(opts.onClick && {
+                        role: 'button',
+                        onClick: (ev: React.MouseEvent<HTMLElement>) => opts.onClick!(d, ev.currentTarget),
+                        onKeyDown: (ev: React.KeyboardEvent<HTMLElement>) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            opts.onClick!(d, ev.currentTarget);
+                          }
+                        },
+                      })}
                     >
                       {content}
                     </td>
                   </TooltipTrigger>
-                  <TooltipContent side="top" className="block max-w-xs">
+                  <TooltipContent side="top" className="pointer-events-none block max-w-xs">
                     {opts.tip(d)}
                   </TooltipContent>
                 </Tooltip>
@@ -280,7 +311,7 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
                   {open &&
                     g.tasks.map((t) => (
                       <tr key={t.key} className="group">
-                        <Tooltip>
+                        <Tooltip disableHoverableContent>
                           <TooltipTrigger asChild>
                             <td className={cn(cellBase, stickyLeft, 'group-hover:bg-accent')}>
                               <a href={`${site}/browse/${t.key}`} target="_blank" rel="noreferrer" className="font-medium text-link hover:underline">
@@ -289,12 +320,13 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
                               <span className="ml-1.5">{t.summary}</span>
                             </td>
                           </TooltipTrigger>
-                          <TooltipContent side="right" className="max-w-sm">
+                          <TooltipContent side="right" className="pointer-events-none max-w-sm">
                             <b>{t.key}</b> {t.summary}
                           </TooltipContent>
                         </Tooltip>
                         {cells((d) => (t.perDay.get(d) ?? []).reduce((s, e) => s + e.timeSpentSeconds, 0), {
-                          tip: (d) => <EntryTip task={t} day={d} />,
+                          tip: (d) => <EntryTip task={t} day={d} editable={Boolean(onEdit)} />,
+                          onClick: onEdit && ((d, el) => editCell(t, d, el)),
                         })}
                         <td className={cn(cellBase, stickyRight)}>{hours(t.total)}</td>
                       </tr>
@@ -362,12 +394,27 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
         <span className="border-b-[3px] border-red-500">over {DAY_TARGET_H}h</span>
         <span>· hover a cell for times and comments</span>
       </div>
+      <Popover open={chooser !== null} onOpenChange={(o) => !o && setChooser(null)}>
+        <PopoverAnchor virtualRef={chooserAnchor} />
+        <PopoverContent side="bottom" align="center" className="w-72 p-0">
+          {chooser && (
+            <LogChooser
+              task={chooser.task}
+              day={chooser.day}
+              onPick={(e) => {
+                setChooser(null);
+                onEdit?.(e);
+              }}
+            />
+          )}
+        </PopoverContent>
+      </Popover>
     </Card>
   );
 }
 
-function EntryTip({ task, day }: { task: TaskRow; day: string }) {
-  const list = [...(task.perDay.get(day) ?? [])].sort((a, b) => (a.started < b.started ? -1 : 1));
+function EntryTip({ task, day, editable }: { task: TaskRow; day: string; editable: boolean }) {
+  const list = logsOn(task, day);
   const total = list.reduce((s, e) => s + e.timeSpentSeconds, 0);
   return (
     <div className="grid min-w-52 gap-1.5">
@@ -392,6 +439,44 @@ function EntryTip({ task, day }: { task: TaskRow; day: string }) {
           </div>
         );
       })}
+      {editable && <div className="border-t border-background/20 pt-1.5 opacity-75">Click to edit</div>}
+    </div>
+  );
+}
+
+/** Lists a cell's logs so one can be picked for editing. */
+function LogChooser({ task, day, onPick }: { task: TaskRow; day: string; onPick: (e: WorklogEntry) => void }) {
+  return (
+    <div className="text-sm">
+      <div className="border-b px-3 py-2 font-medium">
+        <span className="text-link">{task.key}</span> · {formatDay(day)}
+        <div className="text-xs font-normal text-muted-foreground">Which log do you want to edit?</div>
+      </div>
+      <div className="max-h-72 divide-y overflow-auto">
+        {logsOn(task, day).map((e) => {
+          const r = timeRange(e.started, e.timeSpentSeconds);
+          return (
+            <button
+              key={e.id}
+              type="button"
+              onClick={() => onPick(e)}
+              className="group grid w-full gap-0.5 px-3 py-2 text-left outline-none hover:bg-accent/60 focus-visible:bg-accent/60"
+            >
+              <span className="flex justify-between gap-3 text-xs font-semibold tabular-nums">
+                <span className="text-muted-foreground">
+                  {r.from} – {r.to}
+                  {r.nextDay && <sup>+1</sup>}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <PencilIcon className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+                  {formatDuration(e.timeSpentSeconds)}
+                </span>
+              </span>
+              {e.comment && <span className="line-clamp-2 text-xs text-muted-foreground">{e.comment}</span>}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

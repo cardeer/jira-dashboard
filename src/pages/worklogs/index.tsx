@@ -18,7 +18,7 @@ import { useDocumentTitle } from '@/lib/use-document-title';
 import { useSearchState } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
-import type { Person } from '../../../shared/types';
+import type { Person, WorklogEntry } from '../../../shared/types';
 import { summarize } from './aggregate';
 import { ByDay } from './by-day';
 import { ByTask } from './by-task';
@@ -83,6 +83,9 @@ export function WorklogsPage() {
         ? { from: customFrom, to: customTo }
         : presetRange(preset);
   const [logDate, setLogDate] = useState<string | null>(null);
+  const [editing, setEditing] = useState<WorklogEntry | null>(null);
+  // Only your own logs can be edited; other people's views are read-only.
+  const onEdit = readOnly ? undefined : setEditing;
 
   const scope = everyone ? 'all' : viewingId;
   const { data: result, loading, error, reload } = useAsync(
@@ -220,13 +223,14 @@ export function WorklogsPage() {
                 to={range.to}
                 site={creds.site}
                 groupBy={everyone ? 'person' : 'project'}
+                onEdit={onEdit}
               />
             </TabsContent>
             <TabsContent value="calendar">
-              <CalendarView entries={data} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} />
+              <CalendarView entries={data} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} onEdit={onEdit} />
             </TabsContent>
             <TabsContent value="day">
-              <ByDay entries={data} site={creds.site} showPeople={everyone} />
+              <ByDay entries={data} site={creds.site} showPeople={everyone} onEdit={onEdit} />
             </TabsContent>
             <TabsContent value="task">
               <ByTask groups={stats.byTask} total={stats.total} site={creds.site} showPeople={everyone} />
@@ -241,9 +245,14 @@ export function WorklogsPage() {
       </Tabs>
 
       <LogWorkDialog
-        open={logDate !== null}
-        onOpenChange={(o) => !o && setLogDate(null)}
+        open={logDate !== null || editing !== null}
+        onOpenChange={(o) => {
+          if (o) return;
+          setLogDate(null);
+          setEditing(null);
+        }}
         date={logDate ?? toISO(new Date())}
+        entry={editing}
         onLogged={reload}
       />
     </>

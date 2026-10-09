@@ -1,5 +1,5 @@
 import { Fragment, useMemo } from 'react';
-import { PlusIcon } from 'lucide-react';
+import { PencilIcon, PlusIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { formatDay, formatDuration, fromISO, isWeekend, monthGrid, timeRange, toISO } from '@/dates';
@@ -27,6 +27,8 @@ interface Props {
   onDayClick?: (date: string) => void;
   /** All-members mode: chips per person instead of per log. */
   showPeople?: boolean;
+  /** Makes logs in the day's hover card clickable to edit them. */
+  onEdit?: (entry: WorklogEntry) => void;
 }
 
 interface Chip {
@@ -35,7 +37,7 @@ interface Chip {
   seconds: number;
 }
 
-export function CalendarView({ entries, month, onDayClick, showPeople = false }: Props) {
+export function CalendarView({ entries, month, onDayClick, showPeople = false, onEdit }: Props) {
   const { days } = useMemo(() => monthGrid(month), [month]);
   const today = toISO(new Date());
 
@@ -132,7 +134,7 @@ export function CalendarView({ entries, month, onDayClick, showPeople = false }:
             <HoverCard key={day} openDelay={120} closeDelay={60}>
               <HoverCardTrigger asChild>{cell}</HoverCardTrigger>
               <HoverCardContent side="right" align="start" className="w-80 p-0">
-                <DayDetails day={day} list={list} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} />
+                <DayDetails day={day} list={list} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} onEdit={onEdit} />
               </HoverCardContent>
             </HoverCard>
           );
@@ -148,12 +150,14 @@ function DayDetails({
   total,
   canLog,
   showPeople,
+  onEdit,
 }: {
   day: string;
   list: WorklogEntry[];
   total: number;
   canLog: boolean;
   showPeople: boolean;
+  onEdit?: (entry: WorklogEntry) => void;
 }) {
   return (
     <div className="text-sm">
@@ -164,14 +168,25 @@ function DayDetails({
       <div className="max-h-80 divide-y overflow-auto">
         {list.map((e) => {
           const r = timeRange(e.started, e.timeSpentSeconds);
+          const Row = onEdit ? 'button' : 'div';
           return (
-            <div key={e.id} className="grid gap-0.5 px-3 py-2">
+            <Row
+              key={e.id}
+              {...(onEdit && { type: 'button' as const, title: 'Edit work log', onClick: () => onEdit(e) })}
+              className={cn(
+                'group grid w-full gap-0.5 px-3 py-2 text-left',
+                onEdit && 'cursor-pointer outline-none hover:bg-accent/60 focus-visible:bg-accent/60',
+              )}
+            >
               <div className="flex justify-between gap-3">
                 <span className="text-xs font-semibold text-muted-foreground tabular-nums">
                   {r.from} – {r.to}
                   {r.nextDay && <sup>+1</sup>}
                 </span>
-                <span className="text-xs font-semibold tabular-nums">{formatDuration(e.timeSpentSeconds)}</span>
+                <span className="flex items-center gap-1.5 text-xs font-semibold tabular-nums">
+                  {onEdit && <PencilIcon className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />}
+                  {formatDuration(e.timeSpentSeconds)}
+                </span>
               </div>
               {showPeople && (
                 <div className="flex items-center gap-1.5 text-xs font-medium">
@@ -183,11 +198,15 @@ function DayDetails({
                 <span className="font-medium text-link">{e.issueKey}</span> {e.summary}
               </div>
               {e.comment && <p className="text-xs whitespace-pre-line text-muted-foreground">{e.comment}</p>}
-            </div>
+            </Row>
           );
         })}
       </div>
-      {canLog && <div className="border-t px-3 py-2 text-xs text-muted-foreground">Click the day to log more work.</div>}
+      {canLog && (
+        <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+          Click the day to log more work{onEdit && ', or a log above to edit it'}.
+        </div>
+      )}
     </div>
   );
 }

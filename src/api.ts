@@ -58,7 +58,7 @@ const jiraBase = (c: Credentials, api: keyof typeof API_PATHS = 'core') =>
 /** Talks to Jira Cloud through the same-origin rewrite, using axios. */
 async function jiraRequest<T>(
   c: Credentials,
-  method: 'GET' | 'POST' | 'PUT',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   opts: { params?: Record<string, string | number>; data?: unknown; api?: keyof typeof API_PATHS } = {},
   signal?: AbortSignal,
@@ -1297,6 +1297,37 @@ async function addWorklog(c: Credentials, w: NewWorklog): Promise<void> {
   });
 }
 
+/**
+ * Changes an existing work log. Unchanged descriptions are left alone so Jira keeps their
+ * formatting (the dashboard only shows them as plain text). Jira can't move a work log between
+ * issues, so a new task means: log it there, then delete the original.
+ */
+async function updateWorklog(
+  c: Credentials,
+  original: { issueKey: string; id: string; comment: string },
+  w: NewWorklog,
+): Promise<void> {
+  if (w.issueKey !== original.issueKey) {
+    await addWorklog(c, w);
+    await deleteWorklog(c, original.issueKey, original.id);
+    return;
+  }
+  const comment = w.comment.trim();
+  await jiraRequest(c, 'PUT', `/issue/${encodeURIComponent(w.issueKey)}/worklog/${encodeURIComponent(original.id)}`, {
+    data: {
+      started: jiraStarted(w.date, w.start),
+      timeSpentSeconds: w.seconds,
+      ...(comment !== original.comment.trim()
+        ? { comment: comment ? textToAdf(comment) : { type: 'doc', version: 1, content: [] } }
+        : {}),
+    },
+  });
+}
+
+async function deleteWorklog(c: Credentials, issueKey: string, id: string): Promise<void> {
+  await jiraRequest(c, 'DELETE', `/issue/${encodeURIComponent(issueKey)}/worklog/${encodeURIComponent(id)}`);
+}
+
 export const api = {
   me,
   user,
@@ -1322,4 +1353,6 @@ export const api = {
   releaseIssues,
   searchIssueOptions,
   addWorklog,
+  updateWorklog,
+  deleteWorklog,
 };
