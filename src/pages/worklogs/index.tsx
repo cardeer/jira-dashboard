@@ -14,6 +14,7 @@ import { UserPicker } from '@/components/user-picker';
 import { api, type Board } from '@/api';
 import { PRESETS, formatDuration, fromISO, monthGrid, presetRange, toISO, type Preset } from '@/dates';
 import { useSession } from '@/lib/session';
+import { useDocumentTitle } from '@/lib/use-document-title';
 import { useSearchState } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
@@ -89,12 +90,18 @@ export function WorklogsPage() {
     [creds, range.from, range.to, scope, boardId],
   );
   const data = result?.entries ?? null;
+  const title = everyone
+    ? 'All members’ work logs'
+    : viewingId
+      ? `${person?.displayName ?? 'Someone'}’s work logs`
+      : 'Work logs';
+  useDocumentTitle(title);
   const stats = useMemo(() => summarize(data ?? [], range.from, range.to), [data, range.from, range.to]);
 
   return (
     <>
       <PageHeader
-        title={everyone ? 'All members’ work logs' : viewingId ? `${person?.displayName ?? 'Someone'}’s work logs` : 'Work logs'}
+        title={title}
         description={
           everyone
             ? 'Everyone’s logged time on issues you can browse, broken down per person. View only.'

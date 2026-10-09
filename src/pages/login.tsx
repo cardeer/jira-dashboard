@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { api } from '@/api';
 import { normalizeSite } from '@/auth';
 import type { Credentials, Me } from '../../shared/types';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 interface Props {
   initialError?: string;
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function LoginPage({ initialError, onLogin }: Props) {
+  useDocumentTitle('Sign in');
   const [site, setSite] = useState('');
   const [email, setEmail] = useState('');
   const [token, setToken] = useState('');

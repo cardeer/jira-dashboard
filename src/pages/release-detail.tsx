@@ -15,6 +15,7 @@ import { useSession } from '@/lib/session';
 import { useSearchState } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 export function ReleaseDetailPage() {
   const { creds } = useSession();
@@ -31,6 +32,7 @@ export function ReleaseDetailPage() {
   const releaseReq = useAsync((s) => api.release(creds, versionId, s), [creds, versionId]);
   const issuesReq = useAsync((s) => api.releaseIssues(creds, versionId, s), [creds, versionId]);
   const r = releaseReq.data;
+  useDocumentTitle(r ? `${r.name} · Releases` : 'Releases');
   const issues = issuesReq.data;
 
   const counts = useMemo(() => {

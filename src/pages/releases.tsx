@@ -18,6 +18,7 @@ import { useSession } from '@/lib/session';
 import { useSearchState, useUrlSearchInput } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 const STATUSES: { id: ReleaseStatus; label: string }[] = [
   { id: 'unreleased', label: 'Unreleased' },
@@ -43,6 +44,7 @@ function rememberedProject() {
 
 export function ReleasesPage() {
   const { creds } = useSession();
+  useDocumentTitle('Releases');
   const navigate = useNavigate();
   const location = useLocation();
   const { get, set } = useSearchState();

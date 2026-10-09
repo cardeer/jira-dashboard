@@ -35,6 +35,7 @@ import { adfHasOpaqueContent, adfToTiptap, tiptapToAdf } from '@/lib/adf';
 import { useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 interface Props {
   /** Issue to show; null closes the sheet. */
@@ -140,6 +141,8 @@ function Details({
   const detail = useAsync((s) => api.issueDetail(creds, issueKey, s), [creds, issueKey]);
   const meta = useAsync((s) => api.editMeta(creds, issueKey, s), [creds, issueKey]);
   const d = detail.data;
+  // Like Jira: "[KEY] Summary" while the panel is open, back to the page's title when it closes.
+  useDocumentTitle(d ? `[${issueKey}] ${d.summary}` : issueKey, 1);
   const can = (field: string) => Boolean(meta.data?.editable.has(field));
 
   // The editor's starting document: build it once per loaded description, not on every render.

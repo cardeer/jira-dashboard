@@ -34,6 +34,7 @@ import { useAsync } from '@/useAsync';
 import type { StatusCategory, Task, TaskFilter, TaskScope } from '../../../shared/types';
 import { CreateTaskDialog } from './create-task-dialog';
 import { SprintView } from './sprint-view';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 const SCOPES: { id: TaskScope; label: string }[] = [
   { id: 'mine', label: 'Assigned to me' },
@@ -66,6 +67,7 @@ function TasksPageContent() {
   const showAll = get('display') === 'all';
   // ?view=sprints shows the board's sprints and backlog; ?issue=KEY opens the details panel.
   const view = get('view') === 'sprints' ? 'sprints' : 'list';
+  useDocumentTitle(view === 'sprints' ? 'Sprints & backlog' : 'Tasks');
   const openIssue = get('issue') || null;
   const [sprintReload, setSprintReload] = useState(0);
   const [query, setQuery] = useUrlSearchInput('q');
