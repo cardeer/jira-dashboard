@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -8,6 +8,38 @@ import { cn } from '@/lib/utils';
 import type { WorklogEntry } from '../../../shared/types';
 import { PersonAvatar } from '@/components/person-avatar';
 import { hours } from './aggregate';
+
+/** Space kept below the card: the page's bottom padding plus the card border. */
+const PAGE_BOTTOM_PX = 26;
+const MIN_SCROLL_PX = 240;
+
+/**
+ * Height for the table's scroll area so the card ends at the bottom of the window: the page never
+ * scrolls, the table does (header row, task column and totals stay pinned). Recomputed when the
+ * window or anything above it (filters, alerts) changes size.
+ */
+function useFitToViewport(scroll: RefObject<HTMLElement | null>, footer: RefObject<HTMLElement | null>) {
+  const [height, setHeight] = useState<number>();
+  useLayoutEffect(() => {
+    const update = () => {
+      const el = scroll.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      const below = (footer.current?.offsetHeight ?? 0) + PAGE_BOTTOM_PX;
+      setHeight(Math.max(MIN_SCROLL_PX, Math.floor(window.innerHeight - top - below)));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(document.body);
+    if (footer.current) ro.observe(footer.current);
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [scroll, footer]);
+  return height;
+}
 
 const DAY_TARGET_H = 8;
 const LOW_H = 6;
@@ -172,13 +204,17 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
       );
     });
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<HTMLDivElement>(null);
+  const maxHeight = useFitToViewport(scrollRef, footerRef);
+
   if (entries.length === 0) {
     return <Card className="p-10 text-center text-sm text-muted-foreground">No work logged in this period.</Card>;
   }
 
   return (
     <Card className="gap-0 overflow-hidden py-0">
-      <div className="max-h-[calc(100svh-15rem)] overflow-auto">
+      <div ref={scrollRef} className="overflow-auto" style={{ maxHeight }}>
         <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
           <thead>
             <tr>
@@ -297,7 +333,7 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project' }: Prop
           </tfoot>
         </table>
       </div>
-      <div className="flex flex-wrap items-center gap-3 border-t px-4 py-2.5 text-xs text-muted-foreground">
+      <div ref={footerRef} className="flex flex-wrap items-center gap-3 border-t px-4 py-2.5 text-xs text-muted-foreground">
         {groups.length > 1 && (
           <Button
             variant="ghost"
