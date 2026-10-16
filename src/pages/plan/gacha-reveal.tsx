@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { GachaSky } from './gacha-sky';
-import { StarIcon } from 'lucide-react';
+import { FastForwardIcon, StarIcon } from 'lucide-react';
 import { cardRarity, formatNumber, RARITY_COLOR, roundRarity, voteStats, type Rarity } from './points';
 
 export interface RevealedVote {
@@ -13,6 +13,8 @@ interface Props {
   votes: RevealedVote[];
   points: string[];
   onClose: () => void;
+  /** Turn on "always skip" for this viewer; the reveal closes straight to the results. */
+  onAlwaysSkip?: () => void;
 }
 
 /** CSS fallback meteor (no WebGL / reduced motion). */
@@ -45,7 +47,7 @@ function useStars(count: number) {
 
 const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
-export function GachaReveal({ votes, points, onClose }: Props) {
+export function GachaReveal({ votes, points, onClose, onAlwaysSkip }: Props) {
   const values = useMemo(() => votes.map((v) => v.vote), [votes]);
   const stats = useMemo(() => voteStats(values, points), [values, points]);
   const rarity = roundRarity(values, points);
@@ -101,6 +103,28 @@ export function GachaReveal({ votes, points, onClose }: Props) {
       aria-modal="true"
       aria-label="Revealed points"
     >
+      {phase !== 'summary' && (
+        <div className="absolute right-4 top-4 z-10 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          {onAlwaysSkip && (
+            <button
+              type="button"
+              onClick={onAlwaysSkip}
+              className="rounded-full px-3 py-1.5 text-xs font-medium text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              Always skip
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setPhase('summary')}
+            autoFocus
+            className="flex items-center gap-1.5 rounded-full border border-white/25 bg-white/10 px-3.5 py-1.5 text-sm font-semibold text-white backdrop-blur transition-colors hover:bg-white/20"
+          >
+            Skip <FastForwardIcon className="size-4" />
+          </button>
+        </div>
+      )}
+
       {webgl ? (
         <GachaSky meteors={meteors} onLanded={() => setPhase((p) => (p === 'meteor' ? 'cards' : p))} onError={() => setWebgl(false)} />
       ) : (

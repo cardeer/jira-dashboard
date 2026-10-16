@@ -6,7 +6,7 @@ const COLORS = ['var(--primary)', '#ffd36b', '#ff8a5b', '#7ee0c3'];
  * Shockwave ring + sparks around a card the moment it's picked. `intensity` (0–1) scales the
  * hit: bigger numbers burst wider with more sparks. Remount (via `key`) to replay.
  */
-export function PickBurst({ intensity }: { intensity: number }) {
+export function PickBurst({ intensity, delay = 0 }: { intensity: number; /** ms before it fires */ delay?: number }) {
   const sparks = useMemo(() => {
     const count = Math.round(6 + intensity * 12);
     return Array.from({ length: count }, (_, i) => {
@@ -20,15 +20,17 @@ export function PickBurst({ intensity }: { intensity: number }) {
         height: size,
         color: COLORS[i % COLORS.length],
         background: 'currentColor',
-        animationDelay: `${Math.random() * 60}ms`,
+        animationDelay: `${delay + Math.random() * 60}ms`,
       } as CSSProperties;
     });
-  }, [intensity]);
+  }, [intensity, delay]);
 
   return (
     <span className="pointer-events-none absolute inset-0 rounded-[inherit]" aria-hidden>
-      <span className="pick-ring" style={{ '--ring-scale': 1.3 + intensity * 0.9 } as CSSProperties} />
-      {intensity > 0.6 && <span className="pick-ring pick-ring-late" style={{ '--ring-scale': 1.8 + intensity } as CSSProperties} />}
+      <span className="pick-ring" style={{ '--ring-scale': 1.3 + intensity * 0.9, animationDelay: `${delay}ms` } as CSSProperties} />
+      {intensity > 0.6 && (
+        <span className="pick-ring pick-ring-late" style={{ '--ring-scale': 1.8 + intensity, animationDelay: `${delay + 80}ms` } as CSSProperties} />
+      )}
       {sparks.map((s, i) => (
         <span key={i} className="pick-spark" style={s} />
       ))}

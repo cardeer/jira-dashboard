@@ -33,12 +33,13 @@ import { PickBurst } from './pick-burst';
 import { PokeAlert } from './poke-alert';
 import { SplatBlob, THROWABLES, TomatoLayer, TomatoScreen } from './tomato';
 import { roomLink } from './index';
-import { formatNumber, isNumeric, numericScale, tryParsePoints, voteStats } from './points';
+import { cardRarity, formatNumber, isNumeric, numericScale, RARITY_COLOR, tryParsePoints, voteStats } from './points';
 import { REACTIONS, usePlanRoom, type Member, type ReactionKey, type RoomConfig, type SeatReaction, type Throw, type ThrowItem } from './use-plan-room';
 import './plan.css';
 
 const NAME_KEY = 'plan.name';
 const MODE_KEY = 'plan.pickMode';
+const SKIP_REVEAL_KEY = 'plan.skipReveal';
 
 const PICK_MODES = [
   { key: 'cards', emoji: '🃏', label: 'Cards' },
@@ -186,6 +187,12 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
   );
   const [renaming, setRenaming] = useState(false);
   const [showReveal, setShowReveal] = useState(false);
+  // Per viewer: skip the reveal animation and go straight to the results.
+  const [skipReveal, setSkipRevealState] = useState(() => readStored(SKIP_REVEAL_KEY) === '1');
+  const setSkipReveal = (on: boolean) => {
+    setSkipRevealState(on);
+    store(SKIP_REVEAL_KEY, on ? '1' : '0');
+  };
   const [mode, setMode] = useState<PickMode>(() => {
     const stored = readStored(MODE_KEY);
     return PICK_MODES.find((m) => m.key === stored)?.key ?? 'cards';
@@ -241,10 +248,14 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
   const voted = seats.filter((s) => voteOf(s) !== null);
   const revealed: RevealedVote[] = voted.map((s) => ({ id: s.id, name: s.name, vote: voteOf(s)! }));
   const hostPresent = seats.some((s) => s.host);
+  // Quick in-place reveal (when the big animation is skipped): voted cards flip one after another.
+  const revealedValues = revealed.map((r) => r.vote);
+  const flipOrder = new Map(voted.map((s, i) => [s.id, i]));
+  const FLIP_STAGGER = 160;
   const myVote = voteOf({ ...me, id: selfId, self: true });
 
   useEffect(() => {
-    if (revealCount > 0) setShowReveal(true);
+    if (revealCount > 0 && readStored(SKIP_REVEAL_KEY) !== '1') setShowReveal(true);
   }, [revealCount]);
 
   // Warm up the 3D reveal (three.js) in the background so the first reveal starts instantly.
@@ -335,6 +346,11 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
               {room.revealed ? 'Cards are up' : `${voted.length} of ${seats.length} voted`}
               <span className="ml-2 text-xs font-normal text-muted-foreground">Round {room.round + 1}</span>
             </CardTitle>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+            <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground">
+              <input type="checkbox" className="accent-primary" checked={skipReveal} onChange={(e) => setSkipReveal(e.target.checked)} />
+              Skip reveal animation
+            </label>
             {me.host ? (
               <div className="flex flex-wrap gap-2">
                 {room.revealed ? (
@@ -357,6 +373,7 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                 </Button>
               )
             )}
+            </div>
           </CardHeader>
           <CardContent>
             <ul className="flex flex-wrap justify-center gap-x-4 gap-y-5 pt-9 pb-2">
@@ -380,11 +397,40 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                         v !== null && !room.revealed && 'seat-drop',
                         v === null && 'border-dashed text-muted-foreground',
                         v !== null && !room.revealed && 'poker-card-back border-primary shadow-sm',
-                        v !== null && room.revealed && 'border-primary bg-card text-foreground shadow-md',
+                        v !== null && room.revealed && 'seat-revealed bg-card text-foreground',
+                        v !== null && room.revealed && skipReveal && 'seat-flip',
                       )}
+                      style={
+                        v !== null && room.revealed
+                          ? ({
+                              '--rarity': RARITY_COLOR[cardRarity(v, revealedValues, points)],
+                              animationDelay: `${(flipOrder.get(s.id) ?? 0) * FLIP_STAGGER}ms`,
+                            } as CSSProperties)
+                          : undefined
+                      }
                       aria-label={v === null ? `${s.name} hasn’t voted` : room.revealed ? `${s.name} voted ${v}` : `${s.name} voted`}
                     >
                       {v === null ? '·' : room.revealed ? v : ''}
+                      {v !== null && room.revealed && (() => {
+                        const r = cardRarity(v, revealedValues, points);
+                        const delay = (flipOrder.get(s.id) ?? 0) * FLIP_STAGGER;
+                        return (
+                          <>
+                            <span className="absolute inset-x-0 top-1 flex justify-center gap-px text-[9px] leading-none" aria-hidden>
+                              {Array.from({ length: r }, (_, k) => (
+                                <span
+                                  key={k}
+                                  className={skipReveal ? 'seat-star' : undefined}
+                                  style={{ color: 'var(--rarity)', animationDelay: `${delay + 380 + k * 60}ms` }}
+                                >
+                                  ★
+                                </span>
+                              ))}
+                            </span>
+                            {skipReveal && r === 5 && <PickBurst intensity={0.8} delay={delay + 300} />}
+                          </>
+                        );
+                      })()}
                       {/* Fixed intensity: the burst must not hint at the hidden value. */}
                       {v !== null && !room.revealed && (s.picks ?? 0) > 0 && <PickBurst intensity={0.5} />}
                     </div>
@@ -419,7 +465,13 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
             </div>
             <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them or throw a 🍅 or 💩.</p>
             {room.revealed && revealed.length > 0 && (
-              <RevealSummary votes={revealed} points={points} onReplay={() => setShowReveal(true)} />
+              <RevealSummary
+                votes={revealed}
+                points={points}
+                onReplay={() => setShowReveal(true)}
+                animate={skipReveal}
+                delay={voted.length * FLIP_STAGGER + 450}
+              />
             )}
           </CardContent>
         </Card>
@@ -522,41 +574,103 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
       {incomingPoke && <PokeAlert key={incomingPoke.n} fromName={incomingPoke.fromName} onClose={dismissPoke} />}
 
       {showReveal && room.revealed && revealed.length > 0 && (
-        <GachaReveal votes={revealed} points={points} onClose={() => setShowReveal(false)} />
+        <GachaReveal
+          votes={revealed}
+          points={points}
+          onClose={() => setShowReveal(false)}
+          onAlwaysSkip={() => {
+            setSkipReveal(true);
+            setShowReveal(false);
+            toast('Reveal animation off', {
+              description: 'You’ll go straight to the results. Untick “Skip reveal animation” to bring it back.',
+            });
+          }}
+        />
       )}
     </main>
   );
 }
 
-function RevealSummary({ votes, points, onReplay }: { votes: RevealedVote[]; points: string[]; onReplay: () => void }) {
+/** Counts from 0 up to `target` after `delay` ms (or shows it straight away when not animating). */
+function useCountUp(target: number | null, animate: boolean, delay: number, duration = 700) {
+  const [value, setValue] = useState(animate ? 0 : target);
+  useEffect(() => {
+    if (!animate || target === null) {
+      setValue(target);
+      return;
+    }
+    let raf = 0;
+    let start = 0;
+    const t = setTimeout(() => {
+      const step = (now: number) => {
+        start ||= now;
+        const k = Math.min(1, (now - start) / duration);
+        setValue(target * (1 - Math.pow(1 - k, 3)));
+        if (k < 1) raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+    }, delay);
+    return () => {
+      clearTimeout(t);
+      cancelAnimationFrame(raf);
+    };
+  }, [target, animate, delay, duration]);
+  return value;
+}
+
+function RevealSummary({
+  votes,
+  points,
+  onReplay,
+  animate = false,
+  delay = 0,
+}: {
+  votes: RevealedVote[];
+  points: string[];
+  onReplay: () => void;
+  /** Quick reveal: slide in, count the numbers up and grow the bars. */
+  animate?: boolean;
+  delay?: number;
+}) {
   const stats = voteStats(
     votes.map((v) => v.vote),
     points,
   );
   const top = Math.max(...stats.distribution.map((d) => d.count));
+  const average = useCountUp(stats.average, animate, delay + 150);
+  const median = useCountUp(stats.median, animate, delay + 250);
   return (
-    <div className="mt-4 grid gap-3 border-t pt-4">
+    <div className={cn('mt-4 grid gap-3 border-t pt-4', animate && 'quick-summary')} style={animate ? { animationDelay: `${delay}ms` } : undefined}>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
         <span>
-          <span className="text-muted-foreground">Average</span> <strong>{formatNumber(stats.average)}</strong>
+          <span className="text-muted-foreground">Average</span>{' '}
+          <strong className="tabular-nums">{formatNumber(average)}</strong>
         </span>
         <span>
-          <span className="text-muted-foreground">Median</span> <strong>{formatNumber(stats.median)}</strong>
+          <span className="text-muted-foreground">Median</span>{' '}
+          <strong className="tabular-nums">{formatNumber(median)}</strong>
         </span>
         <span>
           <span className="text-muted-foreground">Most picked</span> <strong>{stats.mode.join(', ')}</strong>
         </span>
-        {stats.consensus && <span className="font-semibold text-amber-600 dark:text-amber-400">Consensus!</span>}
+        {stats.consensus && (
+          <span className={cn('font-semibold text-amber-600 dark:text-amber-400', animate && 'quick-pop')} style={animate ? { animationDelay: `${delay + 700}ms` } : undefined}>
+            Consensus!
+          </span>
+        )}
         <Button variant="ghost" size="sm" className="ml-auto" onClick={onReplay}>
           <SparklesIcon /> Replay reveal
         </Button>
       </div>
       <div className="grid gap-1.5">
-        {stats.distribution.map((d) => (
+        {stats.distribution.map((d, i) => (
           <div key={d.value} className="flex items-center gap-2 text-sm">
             <span className="w-10 text-right font-semibold tabular-nums">{d.value}</span>
             <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-primary" style={{ width: `${(d.count / top) * 100}%` }} />
+              <div
+                className={cn('h-full rounded-full bg-primary', animate && 'bar-grow')}
+                style={{ width: `${(d.count / top) * 100}%`, animationDelay: animate ? `${delay + 200 + i * 90}ms` : undefined }}
+              />
             </div>
             <span className="w-6 text-xs tabular-nums text-muted-foreground">{d.count}</span>
           </div>
