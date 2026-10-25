@@ -3,3 +3,7 @@ dist
 .env
 *.log
 .env.local
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+*.tsbuildinfo

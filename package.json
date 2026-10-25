@@ -27,6 +27,7 @@
     "react": "^19.3.0",
     "react-day-picker": "^10.0.2",
     "react-dom": "^19.3.0",
+    "react-is": "^19.3.0",
     "react-router": "^8.4.0",
     "recharts": "^3.8.0",
     "shadcn": "^4.21.2",
@@ -40,9 +41,15 @@
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/react-is": "^19",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.2"
+  },
+  "packageManager": "yarn@4.18.1",
+  "volta": {
+    "node": "24.22.1",
+    "yarn": "4.18.1"
   }
 }
