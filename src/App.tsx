@@ -14,6 +14,7 @@ const WorklogsPage = lazy(() => import('@/pages/worklogs').then((m) => ({ defaul
 const TasksPage = lazy(() => import('@/pages/tasks/index').then((m) => ({ default: m.TasksPage })));
 const ReleasesPage = lazy(() => import('@/pages/releases').then((m) => ({ default: m.ReleasesPage })));
 const ReleaseDetailPage = lazy(() => import('@/pages/release-detail').then((m) => ({ default: m.ReleaseDetailPage })));
+const TimeOffPage = lazy(() => import('@/pages/time-off/index').then((m) => ({ default: m.TimeOffPage })));
 const PlanLobbyPage = lazy(() => import('@/pages/plan/index').then((m) => ({ default: m.PlanLobbyPage })));
 const PlanRoomPage = lazy(() => import('@/pages/plan/room').then((m) => ({ default: m.PlanRoomPage })));
 import type { Credentials, Me } from '../shared/types';
@@ -123,6 +124,7 @@ function AuthedApp() {
           <Route path="tasks" element={<TasksPage />} />
           <Route path="releases" element={<ReleasesPage />} />
           <Route path="releases/:projectKey/:versionId" element={<ReleaseDetailPage />} />
+          <Route path="time-off" element={<TimeOffPage />} />
           <Route path="*" element={<Navigate to="/worklogs" replace />} />
         </Route>
       </Routes>

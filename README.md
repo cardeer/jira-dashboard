@@ -15,8 +15,8 @@ Personal dashboard for Jira Cloud: your assigned tasks, plus **your own** work l
 ## Run
 
 ```bash
-npm install
-npm run dev
+yarn install
+yarn dev
 ```
 
 Deploy to Vercel (framework preset: Vite). Only `<name>.atlassian.net` sites are supported.

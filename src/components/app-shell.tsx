@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router';
-import { CalendarClockIcon, ClipboardListIcon, LayoutDashboardIcon, LogOutIcon, RocketIcon } from 'lucide-react';
+import { CalendarClockIcon, CalendarOffIcon, ClipboardListIcon, LayoutDashboardIcon, LogOutIcon, RocketIcon } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,6 +20,7 @@ const NAV = [
   { to: '/worklogs', label: 'Work logs', icon: CalendarClockIcon },
   { to: '/tasks', label: 'Tasks', icon: ClipboardListIcon },
   { to: '/releases', label: 'Releases', icon: RocketIcon },
+  { to: '/time-off', label: 'Time off', icon: CalendarOffIcon },
 ];
 
 export function AppShell() {

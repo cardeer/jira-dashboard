@@ -1,12 +1,13 @@
 import { Fragment, useMemo } from 'react';
-import { PencilIcon, PlusIcon } from 'lucide-react';
+import { PartyPopperIcon, PencilIcon, PlusIcon, TreePalmIcon } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { formatDay, formatDuration, fromISO, isWeekend, monthGrid, timeRange, toISO } from '@/dates';
 import { cn } from '@/lib/utils';
-import type { WorklogEntry } from '../../../shared/types';
+import type { Holiday, WorklogEntry } from '../../../shared/types';
 import { PersonAvatar } from '@/components/person-avatar';
 import { hours } from './aggregate';
+import { leaveLabel, leaveTime, type LeaveDay } from './leaves';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const MAX_CHIPS = 3;
@@ -21,6 +22,10 @@ function loadDot(seconds: number) {
 
 interface Props {
   entries: WorklogEntry[];
+  /** Leaves by day, shown as chips above the work logs. */
+  leaves?: Map<string, LeaveDay[]>;
+  /** Company holidays by day, shown as chips above the leaves. */
+  holidays?: Map<string, Holiday[]>;
   /** YYYY-MM */
   month: string;
   /** Omit for read-only calendars (viewing someone else's logs). */
@@ -37,7 +42,7 @@ interface Chip {
   seconds: number;
 }
 
-export function CalendarView({ entries, month, onDayClick, showPeople = false, onEdit }: Props) {
+export function CalendarView({ entries, leaves, holidays, month, onDayClick, showPeople = false, onEdit }: Props) {
   const { days } = useMemo(() => monthGrid(month), [month]);
   const today = toISO(new Date());
 
@@ -60,6 +65,8 @@ export function CalendarView({ entries, month, onDayClick, showPeople = false, o
       <div className="grid grid-cols-7">
         {days.map((day, i) => {
           const list = byDay.get(day) ?? [];
+          const dayLeaves = leaves?.get(day) ?? [];
+          const dayHolidays = holidays?.get(day) ?? [];
           const total = list.reduce((s, e) => s + e.timeSpentSeconds, 0);
           const chips: Chip[] = showPeople
             ? [
@@ -85,6 +92,7 @@ export function CalendarView({ entries, month, onDayClick, showPeople = false, o
                 onDayClick ? 'hover:bg-accent/60' : 'cursor-default',
                 (i + 1) % 7 === 0 && 'border-r-0',
                 isWeekend(day) && 'bg-muted/40',
+                dayHolidays.length > 0 && 'bg-rose-500/5',
                 !inMonth && 'bg-muted/60 text-muted-foreground',
               )}
             >
@@ -110,6 +118,33 @@ export function CalendarView({ entries, month, onDayClick, showPeople = false, o
                 )}
               </div>
               <div className="grid gap-0.5">
+                {dayHolidays.map((h) => (
+                  <span
+                    key={h.id}
+                    className={cn(
+                      'flex items-center gap-1 truncate rounded bg-rose-500/15 px-1.5 py-0.5 text-[11px] leading-tight font-medium text-rose-700 dark:text-rose-300',
+                      !inMonth && 'opacity-60',
+                    )}
+                  >
+                    <PartyPopperIcon className="size-3 shrink-0" />
+                    <span className="truncate">{h.name}</span>
+                  </span>
+                ))}
+                {dayLeaves.map(({ leave }) => (
+                  <span
+                    key={leave.id}
+                    className={cn(
+                      'flex items-center gap-1 truncate rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] leading-tight font-medium text-violet-700 dark:text-violet-300',
+                      !inMonth && 'opacity-60',
+                    )}
+                  >
+                    <TreePalmIcon className="size-3 shrink-0" />
+                    <span className="truncate">
+                      {showPeople ? leave.name.split(/\s+/)[0] : leaveLabel(leave)}
+                      {leave.start_time && ` · ${leave.start_time}`}
+                    </span>
+                  </span>
+                ))}
                 {chips.slice(0, MAX_CHIPS).map((c) => (
                   <span
                     key={c.key}
@@ -129,12 +164,12 @@ export function CalendarView({ entries, month, onDayClick, showPeople = false, o
             </button>
           );
 
-          if (list.length === 0) return <Fragment key={day}>{cell}</Fragment>;
+          if (list.length === 0 && dayLeaves.length === 0 && dayHolidays.length === 0) return <Fragment key={day}>{cell}</Fragment>;
           return (
             <HoverCard key={day} openDelay={120} closeDelay={60}>
               <HoverCardTrigger asChild>{cell}</HoverCardTrigger>
               <HoverCardContent side="right" align="start" className="w-80 p-0">
-                <DayDetails day={day} list={list} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} onEdit={onEdit} />
+                <DayDetails day={day} list={list} leaves={dayLeaves} holidays={dayHolidays} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} onEdit={onEdit} />
               </HoverCardContent>
             </HoverCard>
           );
@@ -147,6 +182,8 @@ export function CalendarView({ entries, month, onDayClick, showPeople = false, o
 function DayDetails({
   day,
   list,
+  leaves,
+  holidays,
   total,
   canLog,
   showPeople,
@@ -154,6 +191,8 @@ function DayDetails({
 }: {
   day: string;
   list: WorklogEntry[];
+  leaves: LeaveDay[];
+  holidays: Holiday[];
   total: number;
   canLog: boolean;
   showPeople: boolean;
@@ -166,6 +205,30 @@ function DayDetails({
         <span className="font-semibold tabular-nums">{formatDuration(total)}</span>
       </div>
       <div className="max-h-80 divide-y overflow-auto">
+        {holidays.map((h) => (
+          <div key={h.id} className="grid gap-0.5 bg-rose-500/10 px-3 py-2">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-rose-700 dark:text-rose-300">
+              <PartyPopperIcon className="size-3.5" />
+              {h.name}
+            </span>
+            {h.note && <p className="text-xs whitespace-pre-line text-muted-foreground">{h.note}</p>}
+          </div>
+        ))}
+        {leaves.map(({ leave, seconds }) => (
+          <div key={leave.id} className="grid gap-0.5 bg-violet-500/10 px-3 py-2">
+            <div className="flex justify-between gap-3 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 text-violet-700 dark:text-violet-300">
+                <TreePalmIcon className="size-3.5" />
+                {leaveLabel(leave)}
+              </span>
+              <span className="text-muted-foreground tabular-nums">
+                {leaveTime(leave)} · {formatDuration(seconds)}
+              </span>
+            </div>
+            {showPeople && <div className="text-xs font-medium">{leave.name}</div>}
+            {leave.note && <p className="text-xs whitespace-pre-line text-muted-foreground">{leave.note}</p>}
+          </div>
+        ))}
         {list.map((e) => {
           const r = timeRange(e.started, e.timeSpentSeconds);
           const Row = onEdit ? 'button' : 'div';

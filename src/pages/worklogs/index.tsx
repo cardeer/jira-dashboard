@@ -15,11 +15,13 @@ import { api, type Board } from '@/api';
 import { PRESETS, formatDuration, fromISO, monthGrid, presetRange, toISO, type Preset } from '@/dates';
 import { useSession } from '@/lib/session';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { useSearchState } from '@/lib/use-search-state';
+import { useRememberedSearch, useSearchState } from '@/lib/use-search-state';
 import { cn } from '@/lib/utils';
+import { sheets, sheetsConfigured } from '@/sheets';
 import { useAsync } from '@/useAsync';
 import type { Person, WorklogEntry } from '../../../shared/types';
 import { summarize } from './aggregate';
+import { holidayDays, leaveDays } from './leaves';
 import { ByDay } from './by-day';
 import { ByTask } from './by-task';
 import { CalendarView } from './calendar-view';
@@ -46,7 +48,15 @@ const shiftMonth = (month: string, by: number) => {
   return toISO(new Date(y, m - 1 + by, 1)).slice(0, 7);
 };
 
+// Filters remembered between visits (the calendar month is not: it opens on this month).
+const REMEMBERED = ['view', 'range', 'from', 'to', 'user', 'board'] as const;
+
 export function WorklogsPage() {
+  const ready = useRememberedSearch('jira-dashboard:worklogs-filters', REMEMBERED);
+  return ready ? <WorklogsPageContent /> : null;
+}
+
+function WorklogsPageContent() {
   const { creds, me } = useSession();
   const { get, set } = useSearchState();
 
@@ -93,6 +103,15 @@ export function WorklogsPage() {
     [creds, range.from, range.to, scope, boardId],
   );
   const data = result?.entries ?? null;
+  // Holidays, and leaves for the people shown, from the Google Sheet. Optional: without the sheet
+  // the page works as before.
+  const timeOff = useAsync((s) => (sheetsConfigured ? sheets.list(s) : Promise.resolve(null)), []);
+  const holidays = useMemo(() => holidayDays(timeOff.data?.holidays ?? [], range.from, range.to), [timeOff.data, range.from, range.to]);
+  const leaves = useMemo(() => {
+    const shownId = viewingId ?? me.accountId;
+    const rows = (timeOff.data?.leaves ?? []).filter((l) => everyone || l.account_id === shownId);
+    return leaveDays(rows, range.from, range.to, holidays);
+  }, [timeOff.data, everyone, viewingId, me.accountId, range.from, range.to, holidays]);
   const title = everyone
     ? 'All members’ work logs'
     : viewingId
@@ -219,6 +238,8 @@ export function WorklogsPage() {
               <Timesheet
                 key={everyone ? 'person' : 'project'}
                 entries={data}
+                leaves={leaves}
+                holidays={holidays}
                 from={range.from}
                 to={range.to}
                 site={creds.site}
@@ -227,7 +248,7 @@ export function WorklogsPage() {
               />
             </TabsContent>
             <TabsContent value="calendar">
-              <CalendarView entries={data} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} onEdit={onEdit} />
+              <CalendarView entries={data} leaves={leaves} holidays={holidays} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} onEdit={onEdit} />
             </TabsContent>
             <TabsContent value="day">
               <ByDay entries={data} site={creds.site} showPeople={everyone} onEdit={onEdit} />
