@@ -1,14 +1,15 @@
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, PencilIcon } from 'lucide-react';
+import { ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, PencilIcon, TreePalmIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { eachDay, formatDay, formatDuration, fromISO, isWeekend, timeRange, toISO } from '@/dates';
 import { cn } from '@/lib/utils';
-import type { WorklogEntry } from '../../../shared/types';
+import type { Holiday, WorklogEntry } from '../../../shared/types';
 import { PersonAvatar } from '@/components/person-avatar';
 import { hours } from './aggregate';
+import { leaveLabel, leaveTime, type LeaveDay } from './leaves';
 
 /** Space kept below the card: the page's bottom padding plus the card border. */
 const PAGE_BOTTOM_PX = 26;
@@ -88,6 +89,10 @@ const weekendBg =
 
 interface Props {
   entries: WorklogEntry[];
+  /** Leaves by day, shown as their own rows; not counted in the work totals. */
+  leaves?: Map<string, LeaveDay[]>;
+  /** Company holidays by day: their columns are tinted and named in the day header. */
+  holidays?: Map<string, Holiday[]>;
   from: string;
   to: string;
   site: string;
@@ -100,7 +105,7 @@ interface Props {
 const logsOn = (task: TaskRow, day: string) =>
   [...(task.perDay.get(day) ?? [])].sort((a, b) => (a.started < b.started ? -1 : 1));
 
-export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit }: Props) {
+export function Timesheet({ entries, leaves, holidays, from, to, site, groupBy = 'project', onEdit }: Props) {
   // A cell with several logs asks which one to edit, in a popover anchored to that cell.
   const [chooser, setChooser] = useState<{ task: TaskRow; day: string } | null>(null);
   const chooserAnchor = useRef<HTMLElement | null>(null);
@@ -136,6 +141,21 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
   }, [days]);
   const multiWeek = weeks.length > 1;
 
+  // Leaves per person. All members: shown in each person's row; one person: a "Leave" row.
+  const leaveRows = useMemo(() => {
+    const rows = new Map<string, { key: string; name: string; perDay: Map<string, LeaveDay[]>; total: number }>();
+    for (const [day, list] of leaves ?? []) {
+      for (const ld of list) {
+        const r = rows.get(ld.leave.account_id) ?? { key: ld.leave.account_id, name: ld.leave.name, perDay: new Map(), total: 0 };
+        rows.set(r.key, r);
+        r.perDay.set(day, [...(r.perDay.get(day) ?? []), ld]);
+        r.total += ld.seconds;
+      }
+    }
+    return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [leaves]);
+  const leaveOf = (personId: string, day: string) => leaveRows.find((r) => r.key === personId)?.perDay.get(day) ?? [];
+
   const { groups, dayTotals, grandTotal } = useMemo(() => {
     const projects = new Map<string, ProjectGroup>();
     const dayTotals = new Map<string, number>();
@@ -163,10 +183,16 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
       dayTotals.set(e.date, (dayTotals.get(e.date) ?? 0) + e.timeSpentSeconds);
       grandTotal += e.timeSpentSeconds;
     }
+    // People on leave with nothing logged still get a row to show it.
+    if (byPerson) {
+      for (const r of leaveRows) {
+        if (!projects.has(r.key)) projects.set(r.key, { key: r.key, name: r.name, tasks: [], perDay: new Map(), total: 0 });
+      }
+    }
     const groups = [...projects.values()].sort((a, b) => a.name.localeCompare(b.name));
     for (const g of groups) g.tasks.sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
     return { groups, dayTotals, grandTotal };
-  }, [entries, byPerson]);
+  }, [entries, byPerson, leaveRows]);
 
   const toggle = (key: string) =>
     setToggled((s) => {
@@ -175,12 +201,20 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
       return n;
     });
 
-  const dayBg = (d: string) => cn(isWeekend(d) && weekendBg, d === today && 'bg-primary/5');
+  const isHoliday = (d: string) => Boolean(holidays?.has(d));
+  const dayBg = (d: string) => cn(isWeekend(d) && weekendBg, isHoliday(d) && !isWeekend(d) && 'bg-rose-500/10', d === today && 'bg-primary/5');
 
   /** One row's day cells plus week subtotals. */
   const cells = (
     perDay: (d: string) => number,
-    opts: { underline?: boolean; tip?: (d: string) => ReactNode; rowBg?: string; onClick?: (d: string, el: HTMLElement) => void } = {},
+    opts: {
+      underline?: boolean;
+      tip?: (d: string) => ReactNode;
+      rowBg?: string;
+      onClick?: (d: string, el: HTMLElement) => void;
+      /** The row's leaves on a day: tints the cell and adds them to its tooltip. */
+      leave?: (d: string) => LeaveDay[];
+    } = {},
   ) =>
     weeks.map((w) => {
       const wk = w.days.reduce((s, d) => s + perDay(d), 0);
@@ -188,13 +222,22 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
         <Fragment key={w.days[0]}>
           {w.days.map((d) => {
             const s = perDay(d);
-            const content = s > 0 && (
-              <span className={cn(opts.underline && 'inline-block border-b-[3px] pb-px', opts.underline && loadClass(s))}>
-                {hours(s)}
-              </span>
+            const onLeave = opts.leave?.(d) ?? [];
+            const content = (
+              <>
+                {s > 0 && (
+                  <span className={cn(opts.underline && 'inline-block border-b-[3px] pb-px', opts.underline && loadClass(s))}>
+                    {hours(s)}
+                  </span>
+                )}
+                {onLeave.length > 0 && (
+                  <TreePalmIcon className={cn('inline size-3.5 text-violet-600 dark:text-violet-300', s > 0 && 'ml-0.5 size-3 align-super')} />
+                )}
+              </>
             );
-            const className = cn(cellBase, dayCell, opts.rowBg, dayBg(d));
-            if (s > 0 && opts.tip) {
+            const className = cn(cellBase, dayCell, onLeave.length > 0 ? 'bg-violet-500/15' : [opts.rowBg, dayBg(d)]);
+            const tip = (s > 0 && opts.tip) || onLeave.length > 0;
+            if (tip) {
               return (
                 // Not hoverable: the tooltip covers the cell above, which must stay reachable.
                 <Tooltip key={d} disableHoverableContent>
@@ -220,8 +263,9 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
                       {content}
                     </td>
                   </TooltipTrigger>
-                  <TooltipContent side="top" className="pointer-events-none block max-w-xs">
-                    {opts.tip(d)}
+                  <TooltipContent side="top" className="pointer-events-none grid max-w-xs gap-2">
+                    {onLeave.length > 0 && <LeaveTip day={d} list={onLeave} />}
+                    {s > 0 && opts.tip?.(d)}
                   </TooltipContent>
                 </Tooltip>
               );
@@ -239,7 +283,7 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
   const footerRef = useRef<HTMLDivElement>(null);
   const maxHeight = useFitToViewport(scrollRef, footerRef);
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && leaveRows.length === 0) {
     return <Card className="p-10 text-center text-sm text-muted-foreground">No work logged in this period.</Card>;
   }
 
@@ -264,23 +308,37 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
             <tr>
               {weeks.map((w) => (
                 <Fragment key={w.days[0]}>
-                  {w.days.map((d) => (
-                    <th
-                      key={d}
-                      className={cn(
-                        cellBase,
-                        dayCell,
-                        'sticky top-9 z-20 bg-card leading-tight',
-                        d === today && 'bg-accent',
-                        isWeekend(d) && 'text-red-500',
-                      )}
-                    >
-                      <span className={cn('block text-sm font-semibold', d === today && 'text-primary')}>{fromISO(d).getDate()}</span>
-                      <span className={cn('block text-[10px] font-medium tracking-wide', !isWeekend(d) && 'text-muted-foreground')}>
-                        {formatDay(d, { day: undefined, month: undefined }).slice(0, 2).toUpperCase()}
-                      </span>
-                    </th>
-                  ))}
+                  {w.days.map((d) => {
+                    const off = isWeekend(d) || isHoliday(d);
+                    const th = (
+                      <th
+                        key={d}
+                        className={cn(
+                          cellBase,
+                          dayCell,
+                          'sticky top-9 z-20 bg-card leading-tight',
+                          isHoliday(d) && 'cursor-default bg-rose-50 dark:bg-rose-950',
+                          d === today && 'bg-accent',
+                          off && 'text-red-500',
+                        )}
+                      >
+                        <span className={cn('block text-sm font-semibold', d === today && 'text-primary')}>{fromISO(d).getDate()}</span>
+                        <span className={cn('block text-[10px] font-medium tracking-wide', !off && 'text-muted-foreground')}>
+                          {formatDay(d, { day: undefined, month: undefined }).slice(0, 2).toUpperCase()}
+                        </span>
+                      </th>
+                    );
+                    if (!isHoliday(d)) return th;
+                    return (
+                      <Tooltip key={d} disableHoverableContent>
+                        <TooltipTrigger asChild>{th}</TooltipTrigger>
+                        <TooltipContent side="bottom" className="pointer-events-none max-w-xs">
+                          <b>{holidays!.get(d)!.map((h) => h.name).join(', ')}</b> · {formatDay(d)}
+                          {holidays!.get(d)!.map((h) => h.note && <div key={h.id} className="opacity-75">{h.note}</div>)}
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
                   {multiWeek && (
                     <th className={cn(cellBase, 'sticky top-9 z-20 bg-muted text-xs font-medium text-muted-foreground')}>Week</th>
                   )}
@@ -289,6 +347,21 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
             </tr>
           </thead>
           <tbody>
+            {!byPerson && leaveRows.map((r) => (
+              <tr key={`leave-${r.key}`} className="text-violet-700 dark:text-violet-300">
+                <td className={cn(cellBase, stickyLeft, 'bg-violet-50 font-semibold dark:bg-violet-950')}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <TreePalmIcon className="size-4" />
+                    Leave
+                  </span>
+                </td>
+                {cells((d) => (r.perDay.get(d) ?? []).reduce((s, ld) => s + ld.seconds, 0), {
+                  rowBg: 'bg-violet-500/10',
+                  tip: (d) => <LeaveTip day={d} list={r.perDay.get(d) ?? []} />,
+                })}
+                <td className={cn(cellBase, stickyRight)}>{hours(r.total)}</td>
+              </tr>
+            ))}
             {groups.map((g) => {
               const open = isOpen(g.key);
               return (
@@ -305,7 +378,11 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
                         {g.name}
                       </span>
                     </td>
-                    {cells((d) => g.perDay.get(d) ?? 0, { rowBg: 'bg-muted', underline: byPerson })}
+                    {cells((d) => g.perDay.get(d) ?? 0, {
+                      rowBg: 'bg-muted',
+                      underline: byPerson,
+                      leave: byPerson ? (d) => leaveOf(g.key, d) : undefined,
+                    })}
                     <td className={cn(cellBase, stickyRight)}>{hours(g.total)}</td>
                   </tr>
                   {open &&
@@ -392,6 +469,16 @@ export function Timesheet({ entries, from, to, site, groupBy = 'project', onEdit
         <span className="border-b-[3px] border-amber-500">under {LOW_H}h</span>
         <span className="border-b-[3px] border-emerald-500">{LOW_H}–{DAY_TARGET_H}h</span>
         <span className="border-b-[3px] border-red-500">over {DAY_TARGET_H}h</span>
+        {holidays && holidays.size > 0 && (
+          <span className="inline-flex items-center gap-1">
+            · <span className="inline-block size-3 rounded-sm bg-rose-500/25" /> holiday (hover the date)
+          </span>
+        )}
+        {leaveRows.length > 0 && (
+          <span className="inline-flex items-center gap-1">
+            · <TreePalmIcon className="size-3.5 text-violet-600 dark:text-violet-300" /> on leave
+          </span>
+        )}
         <span>· hover a cell for times and comments</span>
       </div>
       <Popover open={chooser !== null} onOpenChange={(o) => !o && setChooser(null)}>
@@ -440,6 +527,27 @@ function EntryTip({ task, day, editable }: { task: TaskRow; day: string; editabl
         );
       })}
       {editable && <div className="border-t border-background/20 pt-1.5 opacity-75">Click to edit</div>}
+    </div>
+  );
+}
+
+function LeaveTip({ day, list }: { day: string; list: LeaveDay[] }) {
+  return (
+    <div className="grid min-w-52 gap-1.5">
+      <div>
+        <b>{list[0]?.leave.name}</b> · {formatDay(day)}
+      </div>
+      {list.map(({ leave, seconds }) => (
+        <div key={leave.id} className="border-t border-background/20 pt-1.5">
+          <div className="flex justify-between gap-4">
+            <span className="font-semibold">{leaveLabel(leave)}</span>
+            <span className="tabular-nums">
+              {leaveTime(leave)} · {hours(seconds)}h
+            </span>
+          </div>
+          {leave.note && <div className="whitespace-pre-line opacity-75">{leave.note}</div>}
+        </div>
+      ))}
     </div>
   );
 }

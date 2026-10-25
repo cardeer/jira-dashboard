@@ -19,11 +19,30 @@ const TABLES = {
   Leaves: ['id', 'account_id', 'name', 'start_date', 'end_date', 'start_time', 'end_time', 'type', 'note'],
 };
 
+// Reads are cached so repeated GETs skip the sheet. Writes from the app and edits made by hand
+// in the sheet (onEdit below) clear it. 6 hours is the longest CacheService keeps anything.
+const CACHE_KEY = 'list';
+const CACHE_SECONDS = 21600;
+
 function doGet(e) {
   return respond(() => {
     checkKey(e.parameter.key);
-    return { holidays: readTable('Holidays'), leaves: readTable('Leaves') };
+    const cache = CacheService.getScriptCache();
+    const hit = cache.get(CACHE_KEY);
+    if (hit) return JSON.parse(hit);
+    const out = { holidays: readTable('Holidays'), leaves: readTable('Leaves') };
+    try {
+      cache.put(CACHE_KEY, JSON.stringify(out), CACHE_SECONDS);
+    } catch (err) {
+      // Over the 100 KB cache limit: serve uncached.
+    }
+    return out;
   });
+}
+
+/** Simple trigger: runs on any manual edit in the sheet. */
+function onEdit() {
+  CacheService.getScriptCache().remove(CACHE_KEY);
 }
 
 function doPost(e) {
@@ -33,6 +52,7 @@ function doPost(e) {
     if (!TABLES[body.table]) throw new Error('Unknown table: ' + body.table);
     const lock = LockService.getScriptLock();
     lock.waitLock(10000);
+    CacheService.getScriptCache().remove(CACHE_KEY);
     try {
       if (body.action === 'upsert') return { row: upsert(body.table, body.row) };
       if (body.action === 'delete') {

@@ -33,12 +33,51 @@ function post<T>(body: object) {
   return call<T>(axios.post(URL_!, JSON.stringify({ key: KEY, ...body }), { headers: { 'Content-Type': 'text/plain' } }));
 }
 
+type TimeOff = { holidays: Holiday[]; leaves: Leave[] };
+
+/**
+ * Apps Script has daily quotas, so the list is cached in localStorage (shared by the Time off and
+ * Work logs pages, and across reloads) until Refresh, a save or a delete drops it. Edits made by
+ * others, or directly in the sheet, only show up after Refresh.
+ */
+const CACHE_KEY = 'jira-dashboard:time-off-cache';
+
+function readCache(): TimeOff | null {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) ?? 'null');
+    return c?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function invalidate() {
+  try {
+    localStorage.removeItem(CACHE_KEY);
+  } catch {
+    /* storage unavailable: nothing was cached */
+  }
+}
+
+async function list(signal?: AbortSignal): Promise<TimeOff> {
+  const hit = readCache();
+  if (hit) return hit;
+  const { holidays, leaves } = await call<TimeOff>(axios.get(URL_!, { params: { key: KEY }, signal }));
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data: { holidays, leaves } }));
+  } catch {
+    /* storage full or unavailable: just don't cache */
+  }
+  return { holidays, leaves };
+}
+
 export const sheets = {
-  list: (signal?: AbortSignal) =>
-    call<{ holidays: Holiday[]; leaves: Leave[] }>(axios.get(URL_!, { params: { key: KEY }, signal })),
+  list,
+  /** Drops the cache so the next list() asks the sheet (the Refresh button). */
+  invalidate,
   saveHoliday: (row: Omit<Holiday, 'id'> & { id?: string }) =>
-    post<{ row: Holiday }>({ action: 'upsert', table: 'Holidays' satisfies Table, row }).then((r) => r.row),
+    post<{ row: Holiday }>({ action: 'upsert', table: 'Holidays' satisfies Table, row }).then((r) => (invalidate(), r.row)),
   saveLeave: (row: Omit<Leave, 'id'> & { id?: string }) =>
-    post<{ row: Leave }>({ action: 'upsert', table: 'Leaves' satisfies Table, row }).then((r) => r.row),
-  remove: (table: Table, id: string) => post<object>({ action: 'delete', table, id }),
+    post<{ row: Leave }>({ action: 'upsert', table: 'Leaves' satisfies Table, row }).then((r) => (invalidate(), r.row)),
+  remove: (table: Table, id: string) => post<object>({ action: 'delete', table, id }).then(invalidate),
 };

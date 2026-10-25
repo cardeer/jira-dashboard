@@ -38,11 +38,11 @@ import { cn } from '@/lib/utils';
 import { useAsync } from '@/useAsync';
 import type { WorklogEntry } from '../../../shared/types';
 
-const PRESETS = {
+export const PRESETS = {
   morning: { label: 'Morning', start: '09:00', end: '12:30' },
   afternoon: { label: 'Afternoon', start: '13:30', end: '18:00' },
 } as const;
-type PresetId = keyof typeof PRESETS;
+export type PresetId = keyof typeof PRESETS;
 
 interface Props {
   open: boolean;

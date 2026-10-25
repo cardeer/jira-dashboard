@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { PageHeader } from '@/components/page-header';
 import { eachDay, formatDay, toISO } from '@/dates';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { useSearchState } from '@/lib/use-search-state';
+import { useRememberedSearch, useSearchState } from '@/lib/use-search-state';
 import { sheets, sheetsConfigured } from '@/sheets';
 import { useAsync } from '@/useAsync';
 import { HolidayDialog } from './holiday-dialog';
@@ -30,7 +30,15 @@ const dayCount = (from: string, to: string) => {
   return n === 1 ? '1 day' : `${n} days`;
 };
 
+// The tab and range are remembered between visits.
+const REMEMBERED = ['tab', 'range'] as const;
+
 export function TimeOffPage() {
+  const ready = useRememberedSearch('jira-dashboard:time-off-filters', REMEMBERED);
+  return ready ? <TimeOffPageContent /> : null;
+}
+
+function TimeOffPageContent() {
   useDocumentTitle('Time off');
   const { get, set } = useSearchState();
   const tab = get('tab') === 'leaves' ? 'leaves' : 'holidays';
@@ -93,12 +101,20 @@ export function TimeOffPage() {
               variant="outline"
               size="sm"
               value={range}
-              onValueChange={(v) => v && set({ range: v === 'all' ? null : v })}
+              onValueChange={(v) => v && set({ range: v === 'upcoming' ? null : v })}
             >
               <ToggleGroupItem value="upcoming">Upcoming</ToggleGroupItem>
               <ToggleGroupItem value="all">All</ToggleGroupItem>
             </ToggleGroup>
-            <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                sheets.invalidate();
+                reload();
+              }}
+              disabled={loading}
+            >
               <RefreshCwIcon data-icon="inline-start" className={loading ? 'animate-spin' : undefined} /> Refresh
             </Button>
             <Button size="sm" onClick={() => (tab === 'holidays' ? setHoliday('new') : setLeave('new'))}>

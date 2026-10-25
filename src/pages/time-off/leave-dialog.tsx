@@ -10,14 +10,15 @@ import { minutesBetween, toISO } from '@/dates';
 import { useSession } from '@/lib/session';
 import { sheets } from '@/sheets';
 import { DateRangePicker } from '../worklogs/date-range-picker';
+import { PRESETS, type PresetId } from '../worklogs/log-work-dialog';
 import { EntryDialog } from './entry-dialog';
 import type { Leave, Person } from '../../../shared/types';
 
 export const LEAVE_TYPES = [
-  { id: 'vacation', label: 'Vacation' },
-  { id: 'sick', label: 'Sick' },
-  { id: 'personal', label: 'Personal' },
-  { id: 'other', label: 'Other' },
+  { id: 'vacation', label: 'Vacation leave' },
+  { id: 'sick', label: 'Sick leave' },
+  { id: 'personal', label: 'Personal leave' },
+  { id: 'birthday', label: 'Birthday leave' },
 ];
 
 interface Props {
@@ -34,8 +35,8 @@ export function LeaveDialog({ open, onOpenChange, leave, onSaved }: Props) {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [partial, setPartial] = useState(false);
-  const [start, setStart] = useState('09:00');
-  const [end, setEnd] = useState('12:30');
+  const [start, setStart] = useState<string>(PRESETS.morning.start);
+  const [end, setEnd] = useState<string>(PRESETS.morning.end);
   const [type, setType] = useState('vacation');
   const [note, setNote] = useState('');
 
@@ -47,13 +48,14 @@ export function LeaveDialog({ open, onOpenChange, leave, onSaved }: Props) {
     setFrom(leave?.start_date ?? today);
     setTo(leave?.end_date ?? today);
     setPartial(Boolean(leave?.start_time));
-    setStart(leave?.start_time || '09:00');
-    setEnd(leave?.end_time || '12:30');
+    setStart(leave?.start_time || PRESETS.morning.start);
+    setEnd(leave?.end_time || PRESETS.morning.end);
     setType(leave?.type || 'vacation');
     setNote(leave?.note ?? '');
   }, [open, leave, me]);
 
   const timesValid = !partial || minutesBetween(start, end) > 0;
+  const preset = (Object.keys(PRESETS) as PresetId[]).find((p) => PRESETS[p].start === start && PRESETS[p].end === end) ?? '';
   const isMe = person.accountId === me.accountId;
 
   return (
@@ -118,6 +120,27 @@ export function LeaveDialog({ open, onOpenChange, leave, onSaved }: Props) {
             <ToggleGroupItem value="partial">Part of day</ToggleGroupItem>
           </ToggleGroup>
         </div>
+        {partial && (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            className="justify-start"
+            value={preset}
+            onValueChange={(v) => {
+              if (!v) return;
+              setStart(PRESETS[v as PresetId].start);
+              setEnd(PRESETS[v as PresetId].end);
+            }}
+          >
+            {(Object.keys(PRESETS) as PresetId[]).map((p) => (
+              <ToggleGroupItem key={p} value={p} className="px-2.5">
+                {PRESETS[p].label}
+                <span className="text-xs font-normal opacity-70">{PRESETS[p].start}–{PRESETS[p].end}</span>
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
         {partial && (
           <div className="flex flex-wrap items-end gap-2">
             <div className="grid gap-1">
