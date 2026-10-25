@@ -91,3 +91,25 @@ export interface ReleaseIssue {
 }
 
 export type ReleaseFilter = 'unreleased' | 'released' | 'all';
+
+/** A company holiday from the "Holidays" tab of the Google Sheet. Dates are yyyy-MM-dd, inclusive. */
+export interface Holiday {
+  id: string;
+  start_date: string;
+  end_date: string;
+  name: string;
+  note: string;
+}
+
+/** A leave from the "Leaves" tab. Blank times mean whole days; otherwise HH:mm on each day. */
+export interface Leave {
+  id: string;
+  account_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  start_time: string;
+  end_time: string;
+  type: string;
+  note: string;
+}
