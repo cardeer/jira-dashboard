@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import { AlertCircleIcon, CalendarIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
+import { AlertCircleIcon, ArrowRightFromLineIcon, CalendarIcon, CheckIcon, ChevronsUpDownIcon, Loader2Icon, Trash2Icon } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -106,6 +106,20 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, entry: en
     setMinutes(spanTo(s, e));
   };
 
+  // Your other logs on the chosen day, so a new log can start where the latest one ended.
+  const dayLogs = useAsync(
+    (s) => (open && date ? api.worklogs(creds, date, date, null, null, s) : Promise.resolve(null)),
+    [creds, date, open],
+  );
+  const latestEnd = (dayLogs.data?.entries ?? [])
+    .filter((w) => w.id !== entry?.id && w.date === date)
+    .map((w) => {
+      const { from } = timeRange(w.started, w.timeSpentSeconds);
+      return minutesBetween('00:00', from) + Math.round(w.timeSpentSeconds / 60);
+    })
+    .reduce<number | null>((max, m) => (max === null || m > max ? m : max), null);
+  const latestStart = latestEnd === null ? null : addMinutes('00:00', Math.min(latestEnd, 24 * 60 - 1)).time;
+
   const preset = (Object.keys(PRESETS) as PresetId[]).find((p) => PRESETS[p].start === start && PRESETS[p].end === end) ?? '';
   const valid = Boolean(issue) && minutes > 0 && Boolean(date);
 
@@ -178,25 +192,44 @@ export function LogWorkDialog({ open, onOpenChange, date: initialDate, entry: en
           </div>
 
           <div className="grid gap-1.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <Label>Time</Label>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                value={preset}
-                onValueChange={(v) => {
-                  if (!v) return;
-                  setRange(PRESETS[v as PresetId].start, PRESETS[v as PresetId].end);
-                }}
-              >
-                {(Object.keys(PRESETS) as PresetId[]).map((p) => (
-                  <ToggleGroupItem key={p} value={p} className="px-2.5">
-                    {PRESETS[p].label}
-                    <span className="text-xs font-normal opacity-70">{PRESETS[p].start}–{PRESETS[p].end}</span>
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant={latestStart !== null && start === latestStart ? 'secondary' : 'outline'}
+                  size="sm"
+                  className="px-2.5"
+                  disabled={latestStart === null}
+                  onClick={() => latestStart && setStart(latestStart)}
+                  title={
+                    latestStart === null
+                      ? dayLogs.loading ? 'Loading your logs for this day…' : 'No other logs on this day'
+                      : `Start at ${latestStart}, when your latest log on this day ends`
+                  }
+                >
+                  {dayLogs.loading && !dayLogs.data ? <Loader2Icon className="animate-spin" data-icon="inline-start" /> : <ArrowRightFromLineIcon data-icon="inline-start" />}
+                  After last log
+                  {latestStart && <span className="text-xs font-normal opacity-70">{latestStart}</span>}
+                </Button>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  value={preset}
+                  onValueChange={(v) => {
+                    if (!v) return;
+                    setRange(PRESETS[v as PresetId].start, PRESETS[v as PresetId].end);
+                  }}
+                >
+                  {(Object.keys(PRESETS) as PresetId[]).map((p) => (
+                    <ToggleGroupItem key={p} value={p} className="px-2.5">
+                      {PRESETS[p].label}
+                      <span className="text-xs font-normal opacity-70">{PRESETS[p].start}–{PRESETS[p].end}</span>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
             </div>
             <div className="flex flex-wrap items-end gap-2">
               <div className="grid gap-1">
