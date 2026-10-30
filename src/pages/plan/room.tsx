@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import {
@@ -20,6 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { ModeToggle } from '@/components/mode-toggle';
 import { cn } from '@/lib/utils';
 import { BowShooter } from './bow-shooter';
@@ -28,8 +29,10 @@ import { Cannon } from './games/cannon';
 import { Golf } from './games/golf';
 import { Rocket } from './games/rocket';
 import type { GameProps } from './games/kit';
+import { ConsensusCelebration } from './consensus';
 import { GachaReveal, type RevealedVote } from './gacha-reveal';
 import { PickBurst } from './pick-burst';
+import { PlanetReveal } from './planet-reveal';
 import { PokeAlert } from './poke-alert';
 import { SplatBlob, THROWABLES, TomatoLayer, TomatoScreen } from './tomato';
 import { roomLink } from './index';
@@ -40,6 +43,13 @@ import './plan.css';
 const NAME_KEY = 'plan.name';
 const MODE_KEY = 'plan.pickMode';
 const SKIP_REVEAL_KEY = 'plan.skipReveal';
+const REVEAL_STYLE_KEY = 'plan.revealStyle';
+
+const REVEAL_STYLES = [
+  { key: 'planets', emoji: '🪐', label: 'Planets' },
+  { key: 'wish', emoji: '🌠', label: 'Wish' },
+] as const;
+type RevealStyle = (typeof REVEAL_STYLES)[number]['key'];
 
 const PICK_MODES = [
   { key: 'cards', emoji: '🃏', label: 'Cards' },
@@ -193,6 +203,14 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
     setSkipRevealState(on);
     store(SKIP_REVEAL_KEY, on ? '1' : '0');
   };
+  const [revealStyle, setRevealStyleState] = useState<RevealStyle>(() => {
+    const stored = readStored(REVEAL_STYLE_KEY);
+    return REVEAL_STYLES.find((r) => r.key === stored)?.key ?? 'planets';
+  });
+  const setRevealStyle = (r: RevealStyle) => {
+    setRevealStyleState(r);
+    store(REVEAL_STYLE_KEY, r);
+  };
   const [mode, setMode] = useState<PickMode>(() => {
     const stored = readStored(MODE_KEY);
     return PICK_MODES.find((m) => m.key === stored)?.key ?? 'cards';
@@ -257,6 +275,24 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
   useEffect(() => {
     if (revealCount > 0 && readStored(SKIP_REVEAL_KEY) !== '1') setShowReveal(true);
   }, [revealCount]);
+
+  // Everyone (2+) picked the same card: celebrate once per reveal, after the cards are face up.
+  const allSame = room.revealed && voted.length >= 2 && new Set(revealedValues).size === 1;
+  const [celebrated, setCelebrated] = useState<number | null>(null);
+  const [celebrating, setCelebrating] = useState(false);
+  useEffect(() => {
+    if (!allSame || showReveal || celebrated === revealCount) return;
+    const t = setTimeout(
+      () => {
+        setCelebrated(revealCount);
+        setCelebrating(true);
+      },
+      skipReveal ? voted.length * FLIP_STAGGER + 500 : 400,
+    );
+    return () => clearTimeout(t);
+  }, [allSame, showReveal, revealCount, celebrated]);
+  const consensusSeats = allSame && celebrated === revealCount;
+  const endCelebration = useCallback(() => setCelebrating(false), []);
 
   // Warm up the 3D reveal (three.js) in the background so the first reveal starts instantly.
   useEffect(() => {
@@ -347,10 +383,6 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
               <span className="ml-2 text-xs font-normal text-muted-foreground">Round {room.round + 1}</span>
             </CardTitle>
             <div className="flex flex-wrap items-center justify-end gap-2">
-            <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground">
-              <input type="checkbox" className="accent-primary" checked={skipReveal} onChange={(e) => setSkipReveal(e.target.checked)} />
-              Skip reveal animation
-            </label>
             {me.host ? (
               <div className="flex flex-wrap gap-2">
                 {room.revealed ? (
@@ -376,11 +408,11 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
             </div>
           </CardHeader>
           <CardContent>
-            <ul className="flex flex-wrap justify-center gap-x-4 gap-y-5 pt-9 pb-2">
+            <ul className="flex min-h-56 flex-wrap content-center justify-center gap-x-8 gap-y-10 rounded-xl border border-dashed bg-muted/30 px-4 pt-14 pb-8">
               {seats.map((s) => {
                 const v = voteOf(s);
                 return (
-                  <li key={s.id} data-seat={s.id} className="relative flex w-28 flex-col items-center gap-1.5">
+                  <li key={s.id} data-seat={s.id} className="relative flex w-28 flex-col items-center gap-2.5">
                     {reactions[s.id] && <ReactionBubble reaction={reactions[s.id]} />}
                     <SeatActions
                       name={s.name}
@@ -398,7 +430,8 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                         v === null && 'border-dashed text-muted-foreground',
                         v !== null && !room.revealed && 'poker-card-back border-primary shadow-sm',
                         v !== null && room.revealed && 'seat-revealed bg-card text-foreground',
-                        v !== null && room.revealed && skipReveal && 'seat-flip',
+                        v !== null && room.revealed && skipReveal && !consensusSeats && 'seat-flip',
+                        v !== null && consensusSeats && 'seat-consensus',
                       )}
                       style={
                         v !== null && room.revealed
@@ -450,20 +483,47 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
                 );
               })}
             </ul>
-            <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
               {REACTIONS.map((r) => (
                 <button
                   key={r.key}
                   type="button"
                   disabled={reactCooldown}
                   onClick={() => sendReaction(r.key)}
-                  className="flex items-center gap-1 rounded-full border bg-card px-2.5 py-1 text-xs font-bold tracking-wide transition-all enabled:hover:-translate-y-0.5 enabled:hover:border-primary enabled:active:scale-95 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-full border bg-card px-3 py-1.5 text-xs font-bold tracking-wide transition-all enabled:hover:-translate-y-0.5 enabled:hover:border-primary enabled:active:scale-95 disabled:opacity-50"
                 >
                   <span className="text-sm leading-none">{r.emoji}</span> {r.label}
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-center text-xs text-muted-foreground">Tap someone’s card to poke them or throw a 🍅 or 💩.</p>
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
+              <p>Tap someone’s card to poke them or throw a 🍅 or 💩.</p>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Reveal animation">
+                Reveal
+                {REVEAL_STYLES.map((r) => (
+                  <button
+                    key={r.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={revealStyle === r.key}
+                    disabled={skipReveal}
+                    onClick={() => setRevealStyle(r.key)}
+                    className={cn(
+                      'rounded-full border px-2 py-0.5 font-medium transition-colors enabled:hover:bg-accent disabled:opacity-50',
+                      revealStyle === r.key && 'border-primary bg-primary text-primary-foreground enabled:hover:bg-primary',
+                    )}
+                  >
+                    <span aria-hidden>{r.emoji}</span> {r.label}
+                  </button>
+                ))}
+              </div>
+              <label className="flex cursor-pointer select-none items-center gap-2">
+                <Switch checked={skipReveal} onCheckedChange={setSkipReveal} />
+                Skip reveal animation
+              </label>
+              </div>
+            </div>
             {room.revealed && revealed.length > 0 && (
               <RevealSummary
                 votes={revealed}
@@ -571,22 +631,26 @@ function Room({ roomId, name, initialConfig }: { roomId: string; name: string; i
 
       <TomatoLayer throws={throws} onLand={onTomatoLand} />
       {hitMe && <TomatoScreen key={hitMe.n} fromName={hitMe.fromName} item={hitMe.item} n={hitMe.n} onDone={() => setHitMe(null)} />}
+      {celebrating && allSame && <ConsensusCelebration value={revealedValues[0]} onDone={endCelebration} />}
       {incomingPoke && <PokeAlert key={incomingPoke.n} fromName={incomingPoke.fromName} onClose={dismissPoke} />}
 
-      {showReveal && room.revealed && revealed.length > 0 && (
-        <GachaReveal
-          votes={revealed}
-          points={points}
-          onClose={() => setShowReveal(false)}
-          onAlwaysSkip={() => {
-            setSkipReveal(true);
-            setShowReveal(false);
-            toast('Reveal animation off', {
-              description: 'You’ll go straight to the results. Untick “Skip reveal animation” to bring it back.',
-            });
-          }}
-        />
-      )}
+      {showReveal && room.revealed && revealed.length > 0 && (() => {
+        const Reveal = revealStyle === 'planets' ? PlanetReveal : GachaReveal;
+        return (
+          <Reveal
+            votes={revealed}
+            points={points}
+            onClose={() => setShowReveal(false)}
+            onAlwaysSkip={() => {
+              setSkipReveal(true);
+              setShowReveal(false);
+              toast('Reveal animation off', {
+                description: 'You’ll go straight to the results. Turn off “Skip reveal animation” to bring it back.',
+              });
+            }}
+          />
+        );
+      })()}
     </main>
   );
 }
