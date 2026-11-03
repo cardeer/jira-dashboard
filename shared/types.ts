@@ -61,7 +61,8 @@ export interface WorklogEntry {
 }
 
 /** Whose logs to load: one account id, or everyone ('all'). */
-export type WorklogScope = string | 'all';
+/** Whose work logs: these account ids (empty = you) or everyone. */
+export type WorklogScope = string[] | 'all';
 
 export type TaskFilter = 'open' | 'done' | 'all';
 
