@@ -60,22 +60,36 @@ function WorklogsPageContent() {
   const { creds, me } = useSession();
   const { get, set } = useSearchState();
 
-  // ?user=<accountId> views someone else's logs, ?user=all everyone's (both read-only); absent means you.
+  // ?user=<accountId>,<accountId>… views those people's logs, ?user=all everyone's (both read-only);
+  // absent (or just you) means you.
   const userParam = get('user');
   const everyone = userParam === 'all';
-  const viewingId = !everyone && userParam && userParam !== me.accountId ? userParam : null;
-  const readOnly = everyone || viewingId !== null;
+  const userIds = everyone ? [] : [...new Set(userParam.split(',').filter(Boolean))];
+  const viewingKey = userIds.length === 1 && userIds[0] === me.accountId ? '' : userIds.join(',');
+  const viewingIds = useMemo(() => (viewingKey ? viewingKey.split(',') : []), [viewingKey]);
+  const readOnly = everyone || viewingIds.length > 0;
+  // Several people's logs are broken down per person, like everyone's.
+  const perPerson = everyone || viewingIds.length > 1;
 
   // ?board=<id> limits logs to that Jira board's issues (a team's board).
   const boardId = /^\d+$/.test(get('board')) ? get('board') : null;
   const [pickedBoard, setPickedBoard] = useState<Board | null>(null);
   const boardReq = useAsync((s) => (boardId ? api.board(creds, boardId, s) : Promise.resolve(null)), [creds, boardId]);
   const board = boardId ? (boardReq.data ?? (pickedBoard?.id === boardId ? pickedBoard : null)) : null;
-  const [picked, setPicked] = useState<Person | null>(null);
-  const personReq = useAsync((s) => (viewingId ? api.user(creds, viewingId, s) : Promise.resolve(null)), [creds, viewingId]);
-  // Show the picked person immediately while their profile loads (or when opened from a link).
-  const person = viewingId ? (personReq.data ?? (picked?.accountId === viewingId ? picked : null)) : null;
+  const [picked, setPicked] = useState<Person[]>([]);
+  const peopleReq = useAsync(
+    (s) => Promise.all(viewingIds.map((id) => (id === me.accountId ? me : api.user(creds, id, s)))),
+    [creds, me, viewingIds],
+  );
+  // Show the picked people immediately while their profiles load (or when opened from a link).
+  const people = viewingIds.map(
+    (id): Person =>
+      peopleReq.data?.find((p) => p.accountId === id) ??
+      picked.find((p) => p.accountId === id) ?? { accountId: id, displayName: '…' },
+  );
+  const person = viewingIds.length === 1 ? people[0] : null;
   const firstName = person?.displayName.split(/\s+/)[0] ?? 'They';
+  const firstNames = people.map((p) => p.displayName.split(/\s+/)[0]);
 
   // URL: ?range=<preset> or ?from=YYYY-MM-DD&to=YYYY-MM-DD, plus ?view=<view>.
   const customFrom = get('from');
@@ -97,7 +111,7 @@ function WorklogsPageContent() {
   // Only your own logs can be edited; other people's views are read-only.
   const onEdit = readOnly ? undefined : setEditing;
 
-  const scope = everyone ? 'all' : viewingId;
+  const scope = everyone ? 'all' : viewingIds;
   const { data: result, loading, error, reload } = useAsync(
     (s) => api.worklogs(creds, range.from, range.to, scope, boardId, s),
     [creds, range.from, range.to, scope, boardId],
@@ -108,15 +122,19 @@ function WorklogsPageContent() {
   const timeOff = useAsync((s) => (sheetsConfigured ? sheets.list(s) : Promise.resolve(null)), []);
   const holidays = useMemo(() => holidayDays(timeOff.data?.holidays ?? [], range.from, range.to), [timeOff.data, range.from, range.to]);
   const leaves = useMemo(() => {
-    const shownId = viewingId ?? me.accountId;
-    const rows = (timeOff.data?.leaves ?? []).filter((l) => everyone || l.account_id === shownId);
+    const shownIds = viewingIds.length ? viewingIds : [me.accountId];
+    const rows = (timeOff.data?.leaves ?? []).filter((l) => everyone || shownIds.includes(l.account_id));
     return leaveDays(rows, range.from, range.to, holidays);
-  }, [timeOff.data, everyone, viewingId, me.accountId, range.from, range.to, holidays]);
+  }, [timeOff.data, everyone, viewingIds, me.accountId, range.from, range.to, holidays]);
   const title = everyone
     ? 'All members’ work logs'
-    : viewingId
-      ? `${person?.displayName ?? 'Someone'}’s work logs`
-      : 'Work logs';
+    : viewingIds.length > 3
+      ? `${viewingIds.length} people’s work logs`
+      : viewingIds.length > 1
+        ? `${firstNames.slice(0, -1).join(', ')} & ${firstNames[firstNames.length - 1]}’s work logs`
+        : person
+          ? `${person.displayName}’s work logs`
+          : 'Work logs';
   useDocumentTitle(title);
   const stats = useMemo(() => summarize(data ?? [], range.from, range.to), [data, range.from, range.to]);
 
@@ -127,9 +145,11 @@ function WorklogsPageContent() {
         description={
           everyone
             ? 'Everyone’s logged time on issues you can browse, broken down per person. View only.'
-            : viewingId
-              ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
-              : 'Time you logged across every project and team.'
+            : viewingIds.length > 1
+              ? 'Their logged time on issues you can browse, broken down per person. View only.'
+              : person
+                ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
+                : 'Time you logged across every project and team.'
         }
         badge={board ? `Board: ${board.name}` : undefined}
         actions={
@@ -142,10 +162,11 @@ function WorklogsPageContent() {
               }}
             />
             <UserPicker
-              value={everyone ? 'all' : person}
+              multiple
+              value={everyone ? 'all' : people}
               onChange={(v) => {
-                if (v && v !== 'all') setPicked(v);
-                set({ user: v === 'all' ? 'all' : v ? v.accountId : null });
+                if (v !== 'all') setPicked((prev) => [...v, ...prev.filter((p) => !v.some((x) => x.accountId === p.accountId))]);
+                set({ user: v === 'all' ? 'all' : v.map((p) => p.accountId).join(',') || null });
               }}
             />
             {!readOnly && (
@@ -157,7 +178,7 @@ function WorklogsPageContent() {
         }
       />
 
-      {personReq.error && <ErrorAlert error={personReq.error} onRetry={personReq.reload} />}
+      {peopleReq.error && <ErrorAlert error={peopleReq.error} onRetry={peopleReq.reload} />}
       {boardReq.error && <ErrorAlert error={boardReq.error} onRetry={boardReq.reload} />}
       {result?.truncated && (
         <Alert className="mb-4">
@@ -236,29 +257,29 @@ function WorklogsPageContent() {
           <div className={cn(loading && 'opacity-60 transition-opacity')}>
             <TabsContent value="timesheet">
               <Timesheet
-                key={everyone ? 'person' : 'project'}
+                key={perPerson ? 'person' : 'project'}
                 entries={data}
                 leaves={leaves}
                 holidays={holidays}
                 from={range.from}
                 to={range.to}
                 site={creds.site}
-                groupBy={everyone ? 'person' : 'project'}
+                groupBy={perPerson ? 'person' : 'project'}
                 onEdit={onEdit}
               />
             </TabsContent>
             <TabsContent value="calendar">
-              <CalendarView entries={data} leaves={leaves} holidays={holidays} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={everyone} onEdit={onEdit} />
+              <CalendarView entries={data} leaves={leaves} holidays={holidays} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={perPerson} onEdit={onEdit} />
             </TabsContent>
             <TabsContent value="day">
-              <ByDay entries={data} site={creds.site} showPeople={everyone} onEdit={onEdit} />
+              <ByDay entries={data} site={creds.site} showPeople={perPerson} onEdit={onEdit} />
             </TabsContent>
             <TabsContent value="task">
-              <ByTask groups={stats.byTask} total={stats.total} site={creds.site} showPeople={everyone} />
+              <ByTask groups={stats.byTask} total={stats.total} site={creds.site} showPeople={perPerson} />
             </TabsContent>
             <TabsContent value="charts">
               <Suspense fallback={<Skeleton className="h-80 w-full" />}>
-                <Visualization stats={stats} entries={data} showPeople={everyone} />
+                <Visualization stats={stats} entries={data} showPeople={perPerson} />
               </Suspense>
             </TabsContent>
           </div>

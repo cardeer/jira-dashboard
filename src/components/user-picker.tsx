@@ -39,17 +39,22 @@ function useDebounced<T>(value: T, ms: number) {
 }
 
 interface Props {
-  /** The person being viewed; null = me; 'all' = every member. */
-  value: Person | 'all' | null;
-  onChange: (value: Person | 'all' | null) => void;
+  /** The people being viewed; empty = me; 'all' = every member. */
+  value: Person[] | 'all';
+  onChange: (value: Person[] | 'all') => void;
   /** Offer "All members" (default true). */
   allowAll?: boolean;
   /** Button text when the value is me (default "My work logs"). */
   meLabel?: string;
+  /** Let several people be picked at once (default false: picking one replaces the others). */
+  multiple?: boolean;
 }
 
-/** Choose whose work logs to view: everyone, you, recent people, or anyone found by Jira user search. */
-export function UserPicker({ value, onChange, allowAll = true, meLabel = 'My work logs' }: Props) {
+/**
+ * Choose whose work logs to view: everyone, you, recent people, or anyone found by Jira user search.
+ * With `multiple`, picking a person toggles them and the list stays open to pick more.
+ */
+export function UserPicker({ value, onChange, allowAll = true, meLabel = 'My work logs', multiple = false }: Props) {
   const { me, creds } = useSession();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -61,18 +66,25 @@ export function UserPicker({ value, onChange, allowAll = true, meLabel = 'My wor
   );
 
   const everyone = value === 'all';
-  const current = value && value !== 'all' ? value : me;
-  const isMe = !everyone && current.accountId === me.accountId;
+  const selected = everyone ? [] : value.length ? value : [me];
+  const isSelected = (p: Person) => selected.some((s) => s.accountId === p.accountId);
+  const isMe = !everyone && selected.length === 1 && selected[0].accountId === me.accountId;
 
   function pick(p: Person) {
-    if (p.accountId === me.accountId) onChange(null);
-    else {
+    if (p.accountId !== me.accountId) {
       const next = [p, ...recent.filter((r) => r.accountId !== p.accountId)];
       setRecent(next);
       saveRecent(next);
-      onChange(p);
     }
-    setOpen(false);
+    const next =
+      everyone || !multiple
+        ? [p]
+        : isSelected(p)
+          ? selected.filter((s) => s.accountId !== p.accountId)
+          : [...selected, p];
+    // Nobody left, or just you, both mean your own logs.
+    onChange(next.length === 1 && next[0].accountId === me.accountId ? [] : next);
+    if (!multiple) setOpen(false);
     setQuery('');
   }
 
@@ -86,11 +98,14 @@ export function UserPicker({ value, onChange, allowAll = true, meLabel = 'My wor
         </div>
         {p.email && <div className="truncate text-xs text-muted-foreground">{p.email}</div>}
       </div>
-      <CheckIcon className={cn(!everyone && current.accountId === p.accountId ? 'opacity-100' : 'opacity-0')} />
+      <CheckIcon className={cn(!everyone && isSelected(p) ? 'opacity-100' : 'opacity-0')} />
     </CommandItem>
   );
 
-  const others = recent.filter((r) => r.accountId !== me.accountId);
+  // People already picked come first, so they can be unpicked even when not among the recent ones.
+  const others = [...(everyone ? [] : selected), ...recent.filter((r) => everyone || !isSelected(r))].filter(
+    (r) => r.accountId !== me.accountId,
+  );
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -99,9 +114,21 @@ export function UserPicker({ value, onChange, allowAll = true, meLabel = 'My wor
           {everyone ? (
             <UsersIcon className="text-muted-foreground" />
           ) : (
-            <PersonAvatar person={current} className="size-5" />
+            <span className="flex -space-x-1.5">
+              {selected.slice(0, 3).map((p) => (
+                <PersonAvatar key={p.accountId} person={p} className="size-5 ring-2 ring-background" />
+              ))}
+            </span>
           )}
-          <span className="truncate">{everyone ? 'All members' : isMe ? meLabel : current.displayName}</span>
+          <span className="truncate">
+            {everyone
+              ? 'All members'
+              : isMe
+                ? meLabel
+                : selected.length === 1
+                  ? selected[0].displayName
+                  : `${selected.length} people`}
+          </span>
           <ChevronsUpDownIcon className="opacity-50" />
         </Button>
       </PopoverTrigger>

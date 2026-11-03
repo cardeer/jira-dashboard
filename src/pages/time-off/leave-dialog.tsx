@@ -96,7 +96,7 @@ export function LeaveDialog({ open, onOpenChange, leave, onSaved }: Props) {
       <div className="grid gap-1.5">
         <Label>Person</Label>
         <div>
-          <UserPicker value={isMe ? null : person} onChange={(p) => p !== 'all' && setPerson(p ?? me)} allowAll={false} meLabel={me.displayName} />
+          <UserPicker value={isMe ? [] : [person]} onChange={(p) => p !== 'all' && setPerson(p[0] ?? me)} allowAll={false} meLabel={me.displayName} />
         </div>
       </div>
       <div className="grid gap-1.5">

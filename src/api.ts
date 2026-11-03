@@ -783,8 +783,8 @@ export interface WorklogResult {
 }
 
 /**
- * Worklogs between two dates (inclusive), across every project you can browse, for one person
- * (account id; null = you) or everyone ('all').
+ * Worklogs between two dates (inclusive), across every project you can browse, for some people
+ * (account ids; null or empty = you) or everyone ('all').
  */
 async function worklogs(
   c: Credentials,
@@ -797,7 +797,8 @@ async function worklogs(
   const everyone = scope === 'all';
   // A board is defined by a saved filter; `filter = <id>` limits issues to the board's.
   const boardJql = boardId ? `filter = ${Number(await boardFilterId(c, boardId, signal))} AND ` : '';
-  const authorId = everyone ? null : (scope ?? (await me(c, signal)).accountId);
+  const authorIds = everyone ? null : scope?.length ? scope : [(await me(c, signal)).accountId];
+  const authors = authorIds && new Set(authorIds);
 
   // Pad the JQL window by a day each side: worklogDate is evaluated in the viewer's timezone
   // while `started` carries its own offset. We filter precisely below.
@@ -813,10 +814,11 @@ async function worklogs(
     project: { key: string; name: string };
   }
   const dateJql = `worklogDate >= "${pad(from, -1)}" AND worklogDate <= "${pad(to, 1)}"`;
-  const cap = everyone ? WORKLOG_ISSUE_CAP.all : WORKLOG_ISSUE_CAP.person;
+  const cap = !authorIds || authorIds.length > 1 ? WORKLOG_ISSUE_CAP.all : WORKLOG_ISSUE_CAP.person;
+  const authorJql = authorIds ? `worklogAuthor in (${authorIds.map((id) => `"${id}"`).join(', ')}) AND ` : '';
   const issues = await searchIssues<F>(
     c,
-    `${boardJql}${authorId ? `worklogAuthor = "${authorId}" AND ` : ''}${dateJql}`,
+    `${boardJql}${authorJql}${dateJql}`,
     ['summary', 'status', 'issuetype', 'project'],
     signal,
     cap,
@@ -844,7 +846,7 @@ async function worklogs(
         signal,
       );
       for (const w of page.worklogs) {
-        if (!w.author || (authorId && w.author.accountId !== authorId)) continue;
+        if (!w.author || (authors && !authors.has(w.author.accountId))) continue;
         const date = w.started.slice(0, 10);
         if (date < from || date > to) continue;
         out.push({
