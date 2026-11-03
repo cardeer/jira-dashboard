@@ -67,7 +67,6 @@ function WorklogsPageContent() {
   const userIds = everyone ? [] : [...new Set(userParam.split(',').filter(Boolean))];
   const viewingKey = userIds.length === 1 && userIds[0] === me.accountId ? '' : userIds.join(',');
   const viewingIds = useMemo(() => (viewingKey ? viewingKey.split(',') : []), [viewingKey]);
-  const readOnly = everyone || viewingIds.length > 0;
   // Several people's logs are broken down per person, like everyone's.
   const perPerson = everyone || viewingIds.length > 1;
 
@@ -108,8 +107,8 @@ function WorklogsPageContent() {
         : presetRange(preset);
   const [logDate, setLogDate] = useState<string | null>(null);
   const [editing, setEditing] = useState<WorklogEntry | null>(null);
-  // Only your own logs can be edited; other people's views are read-only.
-  const onEdit = readOnly ? undefined : setEditing;
+  // Work can always be logged, but only as yourself (Jira's rule), so only your own logs are editable.
+  const canEdit = (e: WorklogEntry) => e.authorId === me.accountId;
 
   const scope = everyone ? 'all' : viewingIds;
   const { data: result, loading, error, reload } = useAsync(
@@ -144,11 +143,11 @@ function WorklogsPageContent() {
         title={title}
         description={
           everyone
-            ? 'Everyone’s logged time on issues you can browse, broken down per person. View only.'
+            ? 'Everyone’s logged time on issues you can browse, broken down per person.'
             : viewingIds.length > 1
-              ? 'Their logged time on issues you can browse, broken down per person. View only.'
+              ? 'Their logged time on issues you can browse, broken down per person.'
               : person
-                ? `Time ${firstName} logged across every project and team. View only: work is always logged as yourself.`
+                ? `Time ${firstName} logged across every project and team. Work you log is always logged as yourself.`
                 : 'Time you logged across every project and team.'
         }
         badge={board ? `Board: ${board.name}` : undefined}
@@ -169,11 +168,9 @@ function WorklogsPageContent() {
                 set({ user: v === 'all' ? 'all' : v.map((p) => p.accountId).join(',') || null });
               }}
             />
-            {!readOnly && (
-              <Button onClick={() => setLogDate(toISO(new Date()))}>
-                <PlusIcon data-icon="inline-start" /> Log work
-              </Button>
-            )}
+            <Button onClick={() => setLogDate(toISO(new Date()))}>
+              <PlusIcon data-icon="inline-start" /> Log work
+            </Button>
           </>
         }
       />
@@ -265,14 +262,15 @@ function WorklogsPageContent() {
                 to={range.to}
                 site={creds.site}
                 groupBy={perPerson ? 'person' : 'project'}
-                onEdit={onEdit}
+                onEdit={setEditing}
+                canEdit={canEdit}
               />
             </TabsContent>
             <TabsContent value="calendar">
-              <CalendarView entries={data} leaves={leaves} holidays={holidays} month={month} onDayClick={readOnly ? undefined : setLogDate} showPeople={perPerson} onEdit={onEdit} />
+              <CalendarView entries={data} leaves={leaves} holidays={holidays} month={month} onDayClick={setLogDate} showPeople={perPerson} onEdit={setEditing} canEdit={canEdit} />
             </TabsContent>
             <TabsContent value="day">
-              <ByDay entries={data} site={creds.site} showPeople={perPerson} onEdit={onEdit} />
+              <ByDay entries={data} site={creds.site} showPeople={perPerson} onEdit={setEditing} canEdit={canEdit} />
             </TabsContent>
             <TabsContent value="task">
               <ByTask groups={stats.byTask} total={stats.total} site={creds.site} showPeople={perPerson} />
