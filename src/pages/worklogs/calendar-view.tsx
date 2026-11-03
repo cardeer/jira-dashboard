@@ -28,12 +28,14 @@ interface Props {
   holidays?: Map<string, Holiday[]>;
   /** YYYY-MM */
   month: string;
-  /** Omit for read-only calendars (viewing someone else's logs). */
+  /** Omit for read-only calendars. */
   onDayClick?: (date: string) => void;
   /** All-members mode: chips per person instead of per log. */
   showPeople?: boolean;
   /** Makes logs in the day's hover card clickable to edit them. */
   onEdit?: (entry: WorklogEntry) => void;
+  /** Which logs can be edited (default all); only your own can, since Jira logs work as you. */
+  canEdit?: (entry: WorklogEntry) => boolean;
 }
 
 interface Chip {
@@ -42,7 +44,7 @@ interface Chip {
   seconds: number;
 }
 
-export function CalendarView({ entries, leaves, holidays, month, onDayClick, showPeople = false, onEdit }: Props) {
+export function CalendarView({ entries, leaves, holidays, month, onDayClick, showPeople = false, onEdit, canEdit = () => true }: Props) {
   const { days } = useMemo(() => monthGrid(month), [month]);
   const today = toISO(new Date());
 
@@ -169,7 +171,7 @@ export function CalendarView({ entries, leaves, holidays, month, onDayClick, sho
             <HoverCard key={day} openDelay={120} closeDelay={60}>
               <HoverCardTrigger asChild>{cell}</HoverCardTrigger>
               <HoverCardContent side="right" align="start" className="w-80 p-0">
-                <DayDetails day={day} list={list} leaves={dayLeaves} holidays={dayHolidays} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} onEdit={onEdit} />
+                <DayDetails day={day} list={list} leaves={dayLeaves} holidays={dayHolidays} total={total} canLog={Boolean(onDayClick)} showPeople={showPeople} onEdit={onEdit} canEdit={canEdit} />
               </HoverCardContent>
             </HoverCard>
           );
@@ -188,6 +190,7 @@ function DayDetails({
   canLog,
   showPeople,
   onEdit,
+  canEdit,
 }: {
   day: string;
   list: WorklogEntry[];
@@ -197,6 +200,7 @@ function DayDetails({
   canLog: boolean;
   showPeople: boolean;
   onEdit?: (entry: WorklogEntry) => void;
+  canEdit: (entry: WorklogEntry) => boolean;
 }) {
   return (
     <div className="text-sm">
@@ -231,14 +235,15 @@ function DayDetails({
         ))}
         {list.map((e) => {
           const r = timeRange(e.started, e.timeSpentSeconds);
-          const Row = onEdit ? 'button' : 'div';
+          const edit = onEdit && canEdit(e) ? onEdit : undefined;
+          const Row = edit ? 'button' : 'div';
           return (
             <Row
               key={e.id}
-              {...(onEdit && { type: 'button' as const, title: 'Edit work log', onClick: () => onEdit(e) })}
+              {...(edit && { type: 'button' as const, title: 'Edit work log', onClick: () => edit(e) })}
               className={cn(
                 'group grid w-full gap-0.5 px-3 py-2 text-left',
-                onEdit && 'cursor-pointer outline-none hover:bg-accent/60 focus-visible:bg-accent/60',
+                edit && 'cursor-pointer outline-none hover:bg-accent/60 focus-visible:bg-accent/60',
               )}
             >
               <div className="flex justify-between gap-3">
@@ -247,7 +252,7 @@ function DayDetails({
                   {r.nextDay && <sup>+1</sup>}
                 </span>
                 <span className="flex items-center gap-1.5 text-xs font-semibold tabular-nums">
-                  {onEdit && <PencilIcon className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />}
+                  {edit && <PencilIcon className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />}
                   {formatDuration(e.timeSpentSeconds)}
                 </span>
               </div>
@@ -267,7 +272,7 @@ function DayDetails({
       </div>
       {canLog && (
         <div className="border-t px-3 py-2 text-xs text-muted-foreground">
-          Click the day to log more work{onEdit && ', or a log above to edit it'}.
+          Click the day to log more work{onEdit && list.some(canEdit) && ', or a log above to edit it'}.
         </div>
       )}
     </div>

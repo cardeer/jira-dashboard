@@ -100,12 +100,14 @@ interface Props {
   groupBy?: 'project' | 'person';
   /** Makes task cells clickable to edit their logs (omitted when viewing others' logs). */
   onEdit?: (entry: WorklogEntry) => void;
+  /** Which logs can be edited (default all); only your own can, since Jira logs work as you. */
+  canEdit?: (entry: WorklogEntry) => boolean;
 }
 
 const logsOn = (task: TaskRow, day: string) =>
   [...(task.perDay.get(day) ?? [])].sort((a, b) => (a.started < b.started ? -1 : 1));
 
-export function Timesheet({ entries, leaves, holidays, from, to, site, groupBy = 'project', onEdit }: Props) {
+export function Timesheet({ entries, leaves, holidays, from, to, site, groupBy = 'project', onEdit, canEdit = () => true }: Props) {
   // A cell with several logs asks which one to edit, in a popover anchored to that cell.
   const [chooser, setChooser] = useState<{ task: TaskRow; day: string } | null>(null);
   const chooserAnchor = useRef<HTMLElement | null>(null);
@@ -386,28 +388,32 @@ export function Timesheet({ entries, leaves, holidays, from, to, site, groupBy =
                     <td className={cn(cellBase, stickyRight)}>{hours(g.total)}</td>
                   </tr>
                   {open &&
-                    g.tasks.map((t) => (
-                      <tr key={t.key} className="group">
-                        <Tooltip disableHoverableContent>
-                          <TooltipTrigger asChild>
-                            <td className={cn(cellBase, stickyLeft, 'group-hover:bg-accent')}>
-                              <a href={`${site}/browse/${t.key}`} target="_blank" rel="noreferrer" className="font-medium text-link hover:underline">
-                                {t.key}
-                              </a>
-                              <span className="ml-1.5">{t.summary}</span>
-                            </td>
-                          </TooltipTrigger>
-                          <TooltipContent side="right" className="pointer-events-none max-w-sm">
-                            <b>{t.key}</b> {t.summary}
-                          </TooltipContent>
-                        </Tooltip>
-                        {cells((d) => (t.perDay.get(d) ?? []).reduce((s, e) => s + e.timeSpentSeconds, 0), {
-                          tip: (d) => <EntryTip task={t} day={d} editable={Boolean(onEdit)} />,
-                          onClick: onEdit && ((d, el) => editCell(t, d, el)),
-                        })}
-                        <td className={cn(cellBase, stickyRight)}>{hours(t.total)}</td>
-                      </tr>
-                    ))}
+                    g.tasks.map((t) => {
+                      // A row holds one person's logs, so it's editable when they're yours.
+                      const editable = Boolean(onEdit) && [...t.perDay.values()].some((l) => l.some(canEdit));
+                      return (
+                        <tr key={t.key} className="group">
+                          <Tooltip disableHoverableContent>
+                            <TooltipTrigger asChild>
+                              <td className={cn(cellBase, stickyLeft, 'group-hover:bg-accent')}>
+                                <a href={`${site}/browse/${t.key}`} target="_blank" rel="noreferrer" className="font-medium text-link hover:underline">
+                                  {t.key}
+                                </a>
+                                <span className="ml-1.5">{t.summary}</span>
+                              </td>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="pointer-events-none max-w-sm">
+                              <b>{t.key}</b> {t.summary}
+                            </TooltipContent>
+                          </Tooltip>
+                          {cells((d) => (t.perDay.get(d) ?? []).reduce((s, e) => s + e.timeSpentSeconds, 0), {
+                            tip: (d) => <EntryTip task={t} day={d} editable={editable} />,
+                            onClick: editable ? (d, el) => editCell(t, d, el) : undefined,
+                          })}
+                          <td className={cn(cellBase, stickyRight)}>{hours(t.total)}</td>
+                        </tr>
+                        );
+                    })}
                 </Fragment>
               );
             })}

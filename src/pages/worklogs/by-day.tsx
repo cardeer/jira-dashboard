@@ -12,12 +12,15 @@ export function ByDay({
   site,
   showPeople = false,
   onEdit,
+  canEdit = () => true,
 }: {
   entries: WorklogEntry[];
   site: string;
   showPeople?: boolean;
   /** Makes each log clickable to edit it (omitted when viewing others' logs). */
   onEdit?: (entry: WorklogEntry) => void;
+  /** Which logs can be edited (default all); only your own can, since Jira logs work as you. */
+  canEdit?: (entry: WorklogEntry) => boolean;
 }) {
   const days = useMemo(() => {
     const m = new Map<string, WorklogEntry[]>();
@@ -44,22 +47,23 @@ export function ByDay({
             <CardContent className="divide-y px-0">
               {list.map((e) => {
                 const r = timeRange(e.started, e.timeSpentSeconds);
+                const edit = onEdit && canEdit(e) ? onEdit : undefined;
                 return (
                   <div
                     key={e.id}
                     className={cn(
                       'group flex items-start gap-4 px-4 py-3',
-                      onEdit && 'cursor-pointer outline-none hover:bg-accent/60 focus-visible:bg-accent/60',
+                      edit && 'cursor-pointer outline-none hover:bg-accent/60 focus-visible:bg-accent/60',
                     )}
-                    {...(onEdit && {
+                    {...(edit && {
                       role: 'button',
                       tabIndex: 0,
                       title: 'Edit work log',
-                      onClick: () => onEdit(e),
+                      onClick: () => edit(e),
                       onKeyDown: (ev: React.KeyboardEvent) => {
                         if (ev.key === 'Enter' || ev.key === ' ') {
                           ev.preventDefault();
-                          onEdit(e);
+                          edit(e);
                         }
                       },
                     })}
@@ -86,7 +90,7 @@ export function ByDay({
                     </div>
                     <div className="flex shrink-0 items-center gap-2 text-sm font-semibold tabular-nums">
                       {formatDuration(e.timeSpentSeconds)}
-                      {onEdit && <PencilIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />}
+                      {edit && <PencilIcon className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />}
                     </div>
                   </div>
                 );
